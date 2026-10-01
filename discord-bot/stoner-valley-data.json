@@ -47,7 +47,18 @@
       "smokeSessions": 2,
       "raids": 0,
       "successfulRaids": 0,
-      "jobsWorked": 0
+      "jobsWorked": 0,
+      "inventory": {
+        "flower": 0,
+        "carts": 0,
+        "edibles": {},
+        "bongs": {},
+        "lighters": {},
+        "drinks": {},
+        "batteries": {}
+      },
+      "businesses": [],
+      "messages": []
     },
     "816772641586544702": {
       "id": "816772641586544702",

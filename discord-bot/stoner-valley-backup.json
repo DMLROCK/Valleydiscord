@@ -47,7 +47,18 @@
       "smokeSessions": 2,
       "raids": 0,
       "successfulRaids": 0,
-      "jobsWorked": 0
+      "jobsWorked": 0,
+      "inventory": {
+        "flower": 0,
+        "carts": 0,
+        "edibles": {},
+        "bongs": {},
+        "lighters": {},
+        "drinks": {},
+        "batteries": {}
+      },
+      "businesses": [],
+      "messages": []
     },
     "816772641586544702": {
       "id": "816772641586544702",
@@ -75,12 +86,12 @@
       "id": "1490236562724880425",
       "name": "12oclocktristan",
       "cash": 775,
-      "weed": 17,
+      "weed": 27,
       "seeds": 0,
       "storage": 100,
-      "xp": 40,
+      "xp": 65,
       "level": 3,
-      "planted": 16,
+      "planted": 15,
       "fertilizer": 0,
       "premiumSeeds": 0,
       "luckyCharm": 0,
@@ -91,11 +102,40 @@
       "lastWork": 1790876512066,
       "missionsCompleted": 0,
       "achievements": [],
-      "joined": 1790871889001
+      "joined": 1790871889001,
+      "lastRaid": 0,
+      "papers": {
+        "raw_cone": 0,
+        "king_size": 0,
+        "blunt_wrap": 0
+      },
+      "joints": 0,
+      "carts": 0,
+      "wax": 0,
+      "jointUses": 0,
+      "cartUses": 0,
+      "waxUses": 0,
+      "house": false,
+      "houseLevel": 0,
+      "vault": false,
+      "vaultLevel": 0,
+      "vaultWeed": 0,
+      "security": 0,
+      "job": null,
+      "jobLevel": 0,
+      "lastJob": 0,
+      "applications": [],
+      "jointsRolled": 0,
+      "smokeSessions": 0,
+      "raids": 0,
+      "successfulRaids": 0,
+      "jobsWorked": 0
     }
   },
   "market": {
     "weed": 16,
     "lastUpdate": 1790880828890
-  }
+  },
+  "businesses": {},
+  "nextBusinessId": 1
 }
