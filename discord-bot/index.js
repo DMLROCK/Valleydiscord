@@ -15,7 +15,8 @@ const {
 const fs = require("fs");
 
 const TOKEN = process.env.DISCORD_TOKEN;
-const STAFF_PASSWORD = process.env.STAFF_PASSWORD || "Eddies valley";
+const GUILD_ID = 
+  "1548055362740035686";const STAFF_PASSWORD = process.env.STAFF_PASSWORD || "Eddies valley";
 const ALERT_CHANNEL_ID = process.env.ALERT_CHANNEL_ID || "";
 
 if (!TOKEN) {
