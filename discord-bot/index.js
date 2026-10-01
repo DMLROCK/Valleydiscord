@@ -7,8 +7,13 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
-  EmbedBuilder
+  EmbedBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder
 } = require("discord.js");
+const { SECTION_TITLES, buildV2MessagePayload } = require("./components-v2");
 
 // ======================================================
 // STONER VALLEY BOT
@@ -793,11 +798,634 @@ async function registerCommands() {
   console.log("✅ Slash commands registered.");
 }
 
+const COMMAND_SECTIONS = {
+  balance: "economy",
+  bank: "economy",
+  daily: "economy",
+  leaderboard: "economy",
+  dice: "economy",
+  coinflip: "economy",
+  jobs: "work",
+  job: "work",
+  dispensary: "shop",
+  inventory: "inventory",
+  smoke: "inventory",
+  cart: "inventory",
+  edible: "inventory",
+  bong: "inventory",
+  lighter: "inventory",
+  drink: "inventory",
+  phone: "phone",
+  text: "phone",
+  texts: "phone",
+  house: "property",
+  business: "business"
+};
+
+function sectionForCommand(commandName) {
+  return COMMAND_SECTIONS[commandName] || "home";
+}
+
+function actionOption(label, value, description) {
+  return { label, value, description };
+}
+
+function buildActionOptions(section, user, commandName) {
+  if (section === "economy") {
+    const options = [
+      actionOption("Check balance", "cmd:balance", "View cash, bank, and total wealth"),
+      actionOption("Claim daily reward", "cmd:daily", "Claim your daily Valley money"),
+      actionOption("View leaderboard", "cmd:leaderboard", "See the top Valley members"),
+      actionOption("Deposit money…", "bank:deposit", "Enter an amount to deposit"),
+      actionOption("Withdraw money…", "bank:withdraw", "Enter an amount to withdraw")
+    ];
+
+    if (commandName === "dice") {
+      options.unshift(actionOption("Roll dice again", "cmd:dice", "Roll another six-sided die"));
+    } else if (commandName === "coinflip") {
+      options.unshift(actionOption("Flip coin again", "cmd:coinflip", "Flip another coin"));
+    }
+
+    return options;
+  }
+
+  if (section === "work") {
+    const options = [
+      actionOption("View available jobs", "cmd:jobs", "See every job and its shift pay")
+    ];
+
+    if (user.job) {
+      options.push(
+        actionOption("Work a shift", "job:work", "Earn pay and XP from your current job"),
+        actionOption("Quit current job", "job:quit", "Leave your current job")
+      );
+    } else {
+      options.push(...Object.entries(JOBS).map(([id, job]) =>
+        actionOption(`Apply · ${job.name}`, `job:apply:${id}`, `Earn ${money(job.pay)} per shift`)
+      ));
+    }
+
+    return options;
+  }
+
+  if (section === "shop") {
+    return [
+      actionOption("Browse the dispensary", "shop:browse", "View the full product list"),
+      ...Object.entries(PRODUCTS).map(([id, item]) =>
+        actionOption(`Buy ${item.name} · ${money(item.price)}`, `shop:buy:${id}`, "Purchase with Valley cash")
+      )
+    ];
+  }
+
+  if (section === "inventory") {
+    const useActions = Object.entries(PRODUCTS)
+      .filter(([, item]) => ["edible", "bong", "lighter", "drink"].includes(item.category))
+      .map(([id, item]) =>
+        actionOption(`Use ${item.name}`, `use:${item.category}:${id}`, "Use an item from your inventory")
+      );
+
+    return [
+      actionOption("View inventory", "cmd:inventory", "See everything you own"),
+      actionOption("Smoke flower", "use:smoke", "Use flower and your smoking setup"),
+      actionOption("Use a cartridge", "use:cart", "Use one of your cartridges"),
+      ...useActions
+    ];
+  }
+
+  if (section === "phone") {
+    const phoneOptions = user.phone
+      ? []
+      : Object.entries(PHONES).map(([id, phone]) =>
+        actionOption(`Buy ${phone.name} · ${money(phone.price)}`, `phone:buy:${id}`, "Purchase a phone")
+      );
+
+    return [
+      actionOption("View phone", "phone:view", "Check your phone and number"),
+      actionOption("Open text inbox", "cmd:texts", "Read recent messages"),
+      ...phoneOptions
+    ];
+  }
+
+  if (section === "property") {
+    return [
+      actionOption("View house", "house:view", "Check your home and storage"),
+      actionOption("Buy a house", "house:buy", "Purchase a Valley house"),
+      actionOption("Upgrade storage", "house:upgrade", "Increase house storage")
+    ];
+  }
+
+  if (section === "business") {
+    return [
+      actionOption("View businesses", "business:view", "See your businesses"),
+      actionOption("Collect earnings", "business:collect", "Collect available business income"),
+      ...Object.entries(BUSINESS_TYPES).map(([id, business]) =>
+        actionOption(`Create ${business.name}`, `business:create:${id}`, `Start for ${money(business.price)}`)
+      )
+    ];
+  }
+
+  const options = [
+    actionOption("Valley overview", "cmd:valley", "View your Valley dashboard"),
+    actionOption("My profile", "cmd:profile", "View level, XP, and account details"),
+    actionOption("Check balance", "cmd:balance", "View cash and bank"),
+    actionOption("View inventory", "cmd:inventory", "See everything you own"),
+    actionOption("Command guide", "cmd:info", "Browse all slash commands")
+  ];
+
+  if (commandName === "eightball") {
+    options.unshift(actionOption("Ask the 8-ball again…", "eightball:ask", "Enter another question"));
+  }
+
+  return options;
+}
+
+function inventoryLines(items) {
+  return Object.entries(items || {})
+    .filter(([, amount]) => Number(amount) > 0)
+    .map(([id, amount]) => `${PRODUCTS[id]?.name || id}: ${amount}`)
+    .join("\n") || "None";
+}
+
+function buildNavigationPanel(section, user) {
+  const cash = Number(user.cash) || 0;
+  const bank = Number(user.bank) || 0;
+  const job = user.job ? (JOBS[user.job]?.name || "Unknown job") : "Unemployed";
+  const house = user.house || { owned: false, storage: 0 };
+
+  if (section === "economy") {
+    return `💵 **Your Valley economy**
+
+Cash: ${money(cash)}
+🏦 Bank: ${money(bank)}
+💰 Total: ${money(cash + bank)}
+⭐ Level: ${user.level || 1}
+
+Use the quick-action menu to claim your daily reward, manage your bank, or open the leaderboard.`;
+  }
+
+  if (section === "work") {
+    const jobs = Object.values(JOBS)
+      .map(item => `💼 **${item.name}** — ${money(item.pay)} per shift`)
+      .join("\n");
+
+    return `💼 **Work**
+
+Current job: **${job}**
+
+**Available jobs**
+${jobs}
+
+Apply, work a shift, or quit from the quick-action menu.`;
+  }
+
+  if (section === "shop") {
+    const products = Object.values(PRODUCTS)
+      .map(item => `• ${item.name} — ${money(item.price)}`)
+      .join("\n");
+
+    return `🏪 **Valley Dispensary**
+
+Choose a product from the quick-action menu to buy it, or browse the list below.
+
+${products}`;
+  }
+
+  if (section === "inventory") {
+    const inventory = user.inventory || {};
+    return `🎒 **${user.username || "Your"} inventory**
+
+🌿 Flower: **${Number(inventory.flower) || 0}g**
+🛒 Cartridges: **${Number(inventory.carts) || 0}**
+
+🍬 **Edibles**
+${inventoryLines(inventory.edibles)}
+
+💨 **Bongs**
+${inventoryLines(inventory.bongs)}
+
+🔥 **Lighters**
+${inventoryLines(inventory.lighters)}
+
+🔋 **Batteries**
+${inventoryLines(inventory.batteries)}
+
+🥤 **Drinks**
+${inventoryLines(inventory.drinks)}
+
+Use the quick-action menu to use an item.`;
+  }
+
+  if (section === "phone") {
+    const phoneName = user.phone ? (PHONES[user.phone]?.name || "Unknown phone") : "None";
+    const messageCount = Array.isArray(user.messages) ? user.messages.length : 0;
+
+    return `📱 **Phone**
+
+Owned phone: **${phoneName}**
+Recent messages saved: **${messageCount}**
+
+Use the quick-action menu to view your phone, open your inbox, or browse phones for sale.`;
+  }
+
+  if (section === "property") {
+    return `🏠 **Property**
+
+House: **${house.owned ? "Owned" : "Not owned"}**
+Storage capacity: **${Number(house.storage) || 0}g**
+
+Use the quick-action menu to view, buy, or upgrade your house.`;
+  }
+
+  if (section === "business") {
+    const businesses = Array.isArray(user.businesses) ? user.businesses.length : 0;
+    return `🏢 **Business ownership**
+
+Businesses owned: **${businesses}**
+Available business types: **${Object.keys(BUSINESS_TYPES).length}**
+
+Use the quick-action menu to view your businesses, collect earnings, or start a new business.`;
+  }
+
+  if (section === "home") {
+    return `Your Valley dashboard for **${user.username || "player"}**.
+
+💵 Cash: **${money(cash)}** · 🏦 Bank: **${money(bank)}**
+⭐ Level: **${user.level || 1}** · 💼 Job: **${job}**
+
+Use the navigation menu to open a section. The quick-action menu has your most-used commands.`;
+  }
+
+  return "Choose a Valley section from the navigation menu.";
+}
+
+function createV2Payload(
+  sourceInteraction,
+  response,
+  section,
+  update = false,
+  commandName = sourceInteraction.commandName
+) {
+  const user = createUser(sourceInteraction.user.id, sourceInteraction.user.username);
+
+  return buildV2MessagePayload({
+    userId: sourceInteraction.user.id,
+    section,
+    response,
+    actions: buildActionOptions(section, user, commandName),
+    update
+  });
+}
+
+function installV2ReplyAdapter(interaction) {
+  const originalReply = interaction.reply.bind(interaction);
+  const originalFollowUp = interaction.followUp.bind(interaction);
+
+  interaction.reply = response =>
+    originalReply(createV2Payload(interaction, response, sectionForCommand(interaction.commandName)));
+
+  interaction.followUp = response =>
+    originalFollowUp(createV2Payload(interaction, response, sectionForCommand(interaction.commandName)));
+}
+
+async function runCommandFromComponent(sourceInteraction, commandName, commandOptions = {}, responseMode = "update") {
+  const user = createUser(sourceInteraction.user.id, sourceInteraction.user.username);
+  const args = commandOptions.strings || {};
+  const integers = commandOptions.integers || {};
+  const users = commandOptions.users || {};
+  const section = sectionForCommand(commandName);
+
+  const commandInteraction = {
+    commandName,
+    user: sourceInteraction.user,
+    options: {
+      getSubcommand: () => commandOptions.subcommand || null,
+      getString: name => args[name] ?? null,
+      getInteger: name => integers[name] ?? null,
+      getUser: name => users[name] ?? null
+    },
+    reply: response => {
+      const payload = buildV2MessagePayload({
+        userId: sourceInteraction.user.id,
+        section,
+        response,
+        actions: buildActionOptions(section, user, commandName),
+        update: responseMode === "update"
+      });
+
+      return responseMode === "update"
+        ? sourceInteraction.update(payload)
+        : sourceInteraction.reply(payload);
+    }
+  };
+
+  return handleSlashCommand(commandInteraction);
+}
+
+function showBankAmountModal(interaction, subcommand) {
+  const label = subcommand === "deposit" ? "Amount to deposit" : "Amount to withdraw";
+  const title = subcommand === "deposit" ? "Deposit Valley money" : "Withdraw Valley money";
+  const modal = new ModalBuilder()
+    .setCustomId(`sv2:modal:${interaction.user.id}:bank:${subcommand}`)
+    .setTitle(title)
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("amount")
+          .setLabel(label)
+          .setStyle(TextInputStyle.Short)
+          .setMinLength(1)
+          .setMaxLength(15)
+          .setRequired(true)
+      )
+    );
+
+  return interaction.showModal(modal);
+}
+
+function showBusinessNameModal(interaction, businessType) {
+  const business = BUSINESS_TYPES[businessType];
+  if (!business) throw new Error("That business type is not available.");
+
+  const modal = new ModalBuilder()
+    .setCustomId(`sv2:modal:${interaction.user.id}:business:${businessType}`)
+    .setTitle(`Create ${business.name}`)
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("businessName")
+          .setLabel("Business name")
+          .setStyle(TextInputStyle.Short)
+          .setMinLength(1)
+          .setMaxLength(40)
+          .setRequired(true)
+      )
+    );
+
+  return interaction.showModal(modal);
+}
+
+function showEightBallQuestionModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId(`sv2:modal:${interaction.user.id}:eightball:question`)
+    .setTitle("Ask the Valley 8-ball")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("question")
+          .setLabel("Your question")
+          .setStyle(TextInputStyle.Short)
+          .setMinLength(1)
+          .setMaxLength(500)
+          .setRequired(true)
+      )
+    );
+
+  return interaction.showModal(modal);
+}
+
+async function executeV2Action(interaction, action) {
+  if (action.startsWith("cmd:")) {
+    return runCommandFromComponent(interaction, action.slice(4));
+  }
+
+  if (action === "eightball:ask") {
+    return showEightBallQuestionModal(interaction);
+  }
+
+  if (action === "bank:deposit" || action === "bank:withdraw") {
+    return showBankAmountModal(interaction, action.split(":")[1]);
+  }
+
+  if (action.startsWith("job:")) {
+    const [, operation, jobId] = action.split(":");
+    return runCommandFromComponent(interaction, "job", {
+      subcommand: operation,
+      strings: jobId ? { job: jobId } : {}
+    });
+  }
+
+  if (action === "shop:browse") {
+    return runCommandFromComponent(interaction, "dispensary", { subcommand: "browse" });
+  }
+
+  if (action.startsWith("shop:buy:")) {
+    const productId = action.slice("shop:buy:".length);
+    if (!PRODUCTS[productId]) throw new Error("That product is no longer available.");
+    return runCommandFromComponent(interaction, "dispensary", {
+      subcommand: "buy",
+      strings: { item: productId }
+    });
+  }
+
+  if (action === "use:smoke") {
+    return runCommandFromComponent(interaction, "smoke");
+  }
+
+  if (action === "use:cart") {
+    return runCommandFromComponent(interaction, "cart");
+  }
+
+  if (action.startsWith("use:")) {
+    const [, category, itemId] = action.split(":");
+    const commandByCategory = {
+      edible: "edible",
+      bong: "bong",
+      lighter: "lighter",
+      drink: "drink"
+    };
+    const commandName = commandByCategory[category];
+    if (!commandName || !PRODUCTS[itemId] || PRODUCTS[itemId].category !== category) {
+      throw new Error("That inventory action is no longer available.");
+    }
+
+    return runCommandFromComponent(interaction, commandName, {
+      strings: { type: itemId }
+    });
+  }
+
+  if (action === "phone:view") {
+    return runCommandFromComponent(interaction, "phone", { subcommand: "view" });
+  }
+
+  if (action === "cmd:texts") {
+    return runCommandFromComponent(interaction, "texts");
+  }
+
+  if (action.startsWith("phone:buy:")) {
+    const phoneId = action.slice("phone:buy:".length);
+    if (!PHONES[phoneId]) throw new Error("That phone model is no longer available.");
+    return runCommandFromComponent(interaction, "phone", {
+      subcommand: "buy",
+      strings: { model: phoneId }
+    });
+  }
+
+  if (action.startsWith("house:")) {
+    const subcommand = action.slice("house:".length);
+    if (!["view", "buy", "upgrade"].includes(subcommand)) {
+      throw new Error("That property action is not available.");
+    }
+    return runCommandFromComponent(interaction, "house", { subcommand });
+  }
+
+  if (action === "business:view" || action === "business:collect") {
+    return runCommandFromComponent(interaction, "business", {
+      subcommand: action.split(":")[1]
+    });
+  }
+
+  if (action.startsWith("business:create:")) {
+    const businessType = action.slice("business:create:".length);
+    return showBusinessNameModal(interaction, businessType);
+  }
+
+  throw new Error("That quick action is not available.");
+}
+
+async function handleV2ComponentInteraction(interaction) {
+  if (interaction.isStringSelectMenu()) {
+    const parts = interaction.customId.split(":");
+
+    if (parts[0] !== "sv2") return;
+    const ownerId = parts[2];
+
+    if (ownerId !== interaction.user.id) {
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "Only the player who opened this Valley menu can use it.", ephemeral: true },
+        "home"
+      ));
+    }
+
+    if (parts[1] === "navigate") {
+      const section = interaction.values[0];
+      if (!SECTION_TITLES[section]) throw new Error("That Valley section is not available.");
+
+      const user = createUser(interaction.user.id, interaction.user.username);
+      return interaction.update(buildV2MessagePayload({
+        userId: interaction.user.id,
+        section,
+        response: { content: buildNavigationPanel(section, user) },
+        actions: buildActionOptions(section, user),
+        update: true
+      }));
+    }
+
+    if (parts[1] === "actions") {
+      return executeV2Action(interaction, interaction.values[0]);
+    }
+
+    return;
+  }
+
+  if (!interaction.isModalSubmit() || !interaction.customId.startsWith("sv2:modal:")) {
+    return;
+  }
+
+  const parts = interaction.customId.split(":");
+  const ownerId = parts[2];
+  const modalType = parts[3];
+  const modalAction = parts[4];
+
+  if (ownerId !== interaction.user.id) {
+    return interaction.reply(createV2Payload(
+      interaction,
+      { content: "Only the player who opened this Valley form can submit it.", ephemeral: true },
+      "home"
+    ));
+  }
+
+  if (modalType === "bank") {
+    const amount = Number(interaction.fields.getTextInputValue("amount"));
+    if (!Number.isSafeInteger(amount) || amount < 1) {
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "Enter a whole-number amount greater than zero.", ephemeral: true },
+        "economy"
+      ));
+    }
+
+    if (!["deposit", "withdraw"].includes(modalAction)) {
+      throw new Error("That bank action is not available.");
+    }
+
+    return runCommandFromComponent(interaction, "bank", {
+      subcommand: modalAction,
+      integers: { amount }
+    }, "reply");
+  }
+
+  if (modalType === "business") {
+    const businessName = interaction.fields.getTextInputValue("businessName").trim();
+    if (!businessName || businessName.length > 40 || !BUSINESS_TYPES[modalAction]) {
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "Enter a business name of 1–40 characters and try again.", ephemeral: true },
+        "business"
+      ));
+    }
+
+    return runCommandFromComponent(interaction, "business", {
+      subcommand: "create",
+      strings: {
+        type: modalAction,
+        name: businessName
+      }
+    }, "reply");
+  }
+
+  if (modalType === "eightball" && modalAction === "question") {
+    const question = interaction.fields.getTextInputValue("question").trim();
+    if (!question || question.length > 500) {
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "Enter a question of 1–500 characters and try again.", ephemeral: true },
+        "home"
+      ));
+    }
+
+    return runCommandFromComponent(interaction, "eightball", {
+      strings: { question }
+    }, "reply");
+  }
+}
+
+function sectionForComponent(interaction) {
+  const parts = (interaction.customId || "").split(":");
+  if (parts[1] === "actions" && SECTION_TITLES[parts[3]]) return parts[3];
+  if (parts[1] === "navigate" && SECTION_TITLES[interaction.values?.[0]]) {
+    return interaction.values[0];
+  }
+  if (parts[1] === "modal" && parts[3] === "bank") return "economy";
+  if (parts[1] === "modal" && parts[3] === "business") return "business";
+  return "home";
+}
+
+async function handleV2ComponentError(interaction, error) {
+  console.error("Components V2 interaction failed:", error);
+  const section = sectionForComponent(interaction);
+  const response = {
+    content: "Sorry, that Valley action could not be completed. Try the matching slash command.",
+    ephemeral: true
+  };
+
+  try {
+    const payload = createV2Payload(interaction, response, section);
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(payload);
+    } else {
+      await interaction.reply(payload);
+    }
+  } catch (responseError) {
+    console.error("Could not send the Components V2 error response:", responseError);
+  }
+}
+
 // ======================================================
 // READY
 // ======================================================
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`🌿 Logged in as ${client.user.tag}`);
 
   try {
@@ -814,7 +1442,15 @@ client.once("ready", async () => {
 // ======================================================
 
 client.on("interactionCreate", interaction => {
+  if (interaction.isStringSelectMenu() || interaction.isModalSubmit()) {
+    handleV2ComponentInteraction(interaction)
+      .catch(error => handleV2ComponentError(interaction, error));
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
+
+  installV2ReplyAdapter(interaction);
 
   handleSlashCommand(interaction).catch(async error => {
     console.error(`Command /${interaction.commandName} failed:`, error);
