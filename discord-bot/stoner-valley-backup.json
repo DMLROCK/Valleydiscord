@@ -3,24 +3,51 @@
     "1206370546044903455": {
       "id": "1206370546044903455",
       "name": "fscotw",
-      "cash": 602,
-      "weed": 25,
-      "seeds": 5,
+      "cash": 922,
+      "weed": 23,
+      "seeds": 7,
       "storage": 100,
-      "xp": 20,
-      "level": 1,
+      "xp": 10,
+      "level": 2,
       "planted": 0,
       "fertilizer": 0,
       "premiumSeeds": 0,
       "luckyCharm": 0,
       "businessLevel": 0,
       "greenhouseLevel": 0,
-      "dailyStreak": 0,
-      "lastDaily": 0,
+      "dailyStreak": 1,
+      "lastDaily": 1790878569999,
       "lastWork": 1790877046713,
       "missionsCompleted": 0,
       "achievements": [],
-      "joined": 1790871408576
+      "joined": 1790871408576,
+      "lastRaid": 0,
+      "papers": {
+        "raw_cone": 0,
+        "king_size": 0,
+        "blunt_wrap": 0
+      },
+      "joints": 0,
+      "carts": 0,
+      "wax": 0,
+      "jointUses": 0,
+      "cartUses": 0,
+      "waxUses": 0,
+      "house": false,
+      "houseLevel": 0,
+      "vault": false,
+      "vaultLevel": 0,
+      "vaultWeed": 0,
+      "security": 0,
+      "job": null,
+      "jobLevel": 0,
+      "lastJob": 0,
+      "applications": [],
+      "jointsRolled": 0,
+      "smokeSessions": 2,
+      "raids": 0,
+      "successfulRaids": 0,
+      "jobsWorked": 0
     },
     "816772641586544702": {
       "id": "816772641586544702",
@@ -69,6 +96,6 @@
   },
   "market": {
     "weed": 10,
-    "lastUpdate": 1790877575822
+    "lastUpdate": 1790878881708
   }
 }
