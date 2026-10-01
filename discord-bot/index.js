@@ -146,6 +146,20 @@ function money(amount) {
   return `$${amount.toLocaleString()}`;
 }
 
+function truncateDiscordMessage(content, maxLength = 2000) {
+  if (content.length <= maxLength) return content;
+
+  const suffix = "…";
+  let truncated = "";
+
+  for (const character of content) {
+    if (truncated.length + character.length > maxLength - suffix.length) break;
+    truncated += character;
+  }
+
+  return `${truncated}${suffix}`;
+}
+
 // ======================================================
 // REALISTIC IN-SERVER PRODUCTS
 // ======================================================
@@ -440,8 +454,7 @@ const BUSINESS_TYPES = {
 
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.Guilds
   ]
 });
 
@@ -800,10 +813,30 @@ client.once("ready", async () => {
 // INTERACTIONS
 // ======================================================
 
-client.on("interactionCreate", async interaction => {
-
+client.on("interactionCreate", interaction => {
   if (!interaction.isChatInputCommand()) return;
 
+  handleSlashCommand(interaction).catch(async error => {
+    console.error(`Command /${interaction.commandName} failed:`, error);
+
+    try {
+      const response = {
+        content: "Sorry, something went wrong while running that command.",
+        ephemeral: true
+      };
+
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp(response);
+      } else {
+        await interaction.reply(response);
+      }
+    } catch (responseError) {
+      console.error("Could not send the command error response:", responseError);
+    }
+  });
+});
+
+async function handleSlashCommand(interaction) {
   const user = createUser(
     interaction.user.id,
     interaction.user.username
@@ -898,7 +931,7 @@ client.on("interactionCreate", async interaction => {
 ✨ XP: ${user.xp}/${user.level * 100}
 💵 Cash: ${money(user.cash)}
 🏦 Bank: ${money(user.bank)}
-💼 Job: ${user.job ? JOBS[user.job].name : "Unemployed"}
+💼 Job: ${user.job ? (JOBS[user.job]?.name || "Unknown job") : "Unemployed"}
 📱 Phone: ${user.phone ? PHONES[user.phone].name : "None"}
 🏠 House: ${user.house.owned ? "Owned" : "None"}
 🏢 Businesses: ${user.businesses.length}`
@@ -1040,7 +1073,7 @@ You received **${money(amount)}**.
 
       if (user.job) {
         return interaction.reply({
-          content: `❌ You already work as **${JOBS[user.job].name}**. Quit first.`
+          content: `❌ You already work as **${JOBS[user.job]?.name || "an unknown job"}**. Quit first.`
         });
       }
 
@@ -1073,6 +1106,12 @@ You received **${money(amount)}**.
 
       const job = JOBS[user.job];
 
+      if (!job) {
+        return interaction.reply({
+          content: "❌ Your saved job could not be found. Use `/job quit`, then apply for a valid job."
+        });
+      }
+
       user.cash += job.pay;
       user.lastWork = now;
 
@@ -1098,7 +1137,7 @@ Job: ${job.name}
         });
       }
 
-      const oldJob = JOBS[user.job].name;
+      const oldJob = JOBS[user.job]?.name || "an unknown job";
 
       user.job = null;
       saveDatabase();
@@ -1661,8 +1700,10 @@ From: **${interaction.user.username}**
       )
       .join("\n\n");
 
+    const response = `📥 **Recent Messages**\n\n${recent}`;
+
     return interaction.reply({
-      content: `📥 **Recent Messages**\n\n${recent}`
+      content: truncateDiscordMessage(response)
     });
   }
 
@@ -1811,14 +1852,14 @@ You are now the **CEO**.`
         .filter(Boolean)
         .map(b =>
           `🏢 **${b.name}**
-Type: ${BUSINESS_TYPES[b.type].name}
+Type: ${BUSINESS_TYPES[b.type]?.name || "Unknown business"}
 Level: ${b.level}
 Available earnings: ${money(b.balance)}`
         )
         .join("\n\n");
 
       return interaction.reply({
-        content: `🏢 **Your Businesses**\n\n${list}`
+        content: truncateDiscordMessage(`🏢 **Your Businesses**\n\n${list}`)
       });
     }
 
@@ -1837,8 +1878,11 @@ Available earnings: ${money(b.balance)}`
 
         if (!business) continue;
 
+        const businessType = BUSINESS_TYPES[business.type];
+        if (!businessType) continue;
+
         business.balance +=
-          BUSINESS_TYPES[business.type].income *
+          businessType.income *
           business.level;
 
         total += business.balance;
@@ -1937,7 +1981,7 @@ CEO: **${interaction.user.username}**`
     });
   }
 
-});
+}
 
 // ======================================================
 // AUTOMATIC SAVES
