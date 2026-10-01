@@ -130,6 +130,33 @@
       "raids": 0,
       "successfulRaids": 0,
       "jobsWorked": 0
+    },
+    "970987607611830272": {
+      "id": "970987607611830272",
+      "username": "sourced.dev",
+      "cash": 250,
+      "bank": 0,
+      "xp": 0,
+      "level": 1,
+      "phone": null,
+      "inventory": {
+        "flower": 0,
+        "carts": 0,
+        "edibles": {},
+        "bongs": {},
+        "lighters": {},
+        "drinks": {},
+        "batteries": {}
+      },
+      "house": {
+        "owned": false,
+        "storage": 100
+      },
+      "job": null,
+      "businesses": [],
+      "messages": [],
+      "dailyClaimed": 0,
+      "lastWork": 0
     }
   },
   "market": {
