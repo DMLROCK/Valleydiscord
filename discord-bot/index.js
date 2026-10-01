@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("fs");
 const {
   Client,
   GatewayIntentBits,
@@ -9,2544 +10,1949 @@ const {
   EmbedBuilder
 } = require("discord.js");
 
-const fs = require("fs");
+// ======================================================
+// STONER VALLEY BOT
+// ======================================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = "1548055362740035686";
-const STAFF_PASSWORD =
-  process.env.STAFF_PASSWORD || "Eddies valley";
-const ALERT_CHANNEL_ID =
-  process.env.ALERT_CHANNEL_ID || "";
 
 if (!TOKEN) {
-  console.error(
-    "❌ DISCORD_TOKEN is missing from Replit Secrets."
-  );
+  console.error("❌ DISCORD_TOKEN is missing.");
   process.exit(1);
 }
 
-/* =========================
-   DATABASE
-========================= */
+const DATA_FILE = "./stoner-valley-data.json";
+const BACKUP_FILE = "./stoner-valley-backup.json";
 
-const DATA_FILE = "stoner-valley-data.json";
-const BACKUP_FILE = "stoner-valley-backup.json";
+// ======================================================
+// DATABASE
+// ======================================================
 
-let database = {
+let db = {
   users: {},
-  market: {
-    weed: 25,
-    lastUpdate: Date.now()
-  }
+  businesses: {},
+  nextBusinessId: 1
 };
 
 function loadDatabase() {
   try {
     if (fs.existsSync(DATA_FILE)) {
-      const saved = JSON.parse(
-        fs.readFileSync(DATA_FILE, "utf8")
-      );
-
-      database = {
-        ...database,
-        ...saved,
-        users: saved.users || {},
-        market: {
-          ...database.market,
-          ...(saved.market || {})
-        }
-      };
+      db = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     }
   } catch (error) {
-    console.error(
-      "❌ Database load error:",
-      error
-    );
+    console.error("Database load error:", error);
   }
+
+  if (!db.users) db.users = {};
+  if (!db.businesses) db.businesses = {};
+  if (!db.nextBusinessId) db.nextBusinessId = 1;
 }
 
 function saveDatabase() {
   try {
-    fs.writeFileSync(
-      DATA_FILE,
-      JSON.stringify(database, null, 2)
-    );
+    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
   } catch (error) {
-    console.error(
-      "❌ Database save error:",
-      error
-    );
+    console.error("Database save error:", error);
   }
 }
 
 function backupDatabase() {
   try {
-    fs.writeFileSync(
-      BACKUP_FILE,
-      JSON.stringify(database, null, 2)
-    );
+    fs.writeFileSync(BACKUP_FILE, JSON.stringify(db, null, 2));
   } catch (error) {
-    console.error(
-      "❌ Backup error:",
-      error
-    );
+    console.error("Backup error:", error);
   }
 }
 
 loadDatabase();
 
-/* =========================
-   CLIENT
-========================= */
+// ======================================================
+// USER DATA
+// ======================================================
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
+function createUser(id, username) {
+  if (!db.users[id]) {
+    db.users[id] = {
+      id,
+      username,
 
-/* =========================
-   USER DATA
-========================= */
-
-function getUser(user) {
-  if (!database.users[user.id]) {
-    database.users[user.id] = {
-      id: user.id,
-      name: user.username,
-
-      cash: 500,
-      weed: 25,
-      seeds: 5,
-      storage: 100,
+      cash: 250,
+      bank: 0,
 
       xp: 0,
       level: 1,
 
-      planted: 0,
-      fertilizer: 0,
-      premiumSeeds: 0,
-      luckyCharm: 0,
+      phone: null,
 
-      businessLevel: 0,
-
-      dailyStreak: 0,
-      lastDaily: 0,
-      lastWork: 0,
-      lastRaid: 0,
-
-      achievements: [],
-
-      papers: {
-        raw_cone: 0,
-        king_size: 0,
-        blunt_wrap: 0
+      inventory: {
+        flower: 0,
+        carts: 0,
+        edibles: {},
+        bongs: {},
+        lighters: {},
+        drinks: {},
+        batteries: {}
       },
 
-      joints: 0,
-      carts: 0,
-      wax: 0,
-
-      jointUses: 0,
-      cartUses: 0,
-      waxUses: 0,
-
-      house: false,
-      houseLevel: 0,
-
-      vault: false,
-      vaultLevel: 0,
-      vaultWeed: 0,
-
-      security: 0,
+      house: {
+        owned: false,
+        storage: 100
+      },
 
       job: null,
-      jobLevel: 0,
-      lastJob: 0,
-      applications: [],
+      businesses: [],
 
-      jointsRolled: 0,
-      smokeSessions: 0,
-      raids: 0,
-      successfulRaids: 0,
-      jobsWorked: 0,
+      messages: [],
 
-      joined: Date.now()
+      dailyClaimed: 0,
+      lastWork: 0
     };
   }
 
-  const player = database.users[user.id];
+  // Repair older databases
+  const u = db.users[id];
 
-  player.name = user.username;
+  if (!u.inventory) u.inventory = {};
+  if (u.inventory.flower == null) u.inventory.flower = 0;
+  if (u.inventory.carts == null) u.inventory.carts = 0;
+  if (!u.inventory.edibles) u.inventory.edibles = {};
+  if (!u.inventory.bongs) u.inventory.bongs = {};
+  if (!u.inventory.lighters) u.inventory.lighters = {};
+  if (!u.inventory.drinks) u.inventory.drinks = {};
+  if (!u.inventory.batteries) u.inventory.batteries = {};
 
-  player.cash ??= 500;
-  player.weed ??= 25;
-  player.seeds ??= 5;
-  player.storage ??= 100;
+  if (!u.businesses) u.businesses = [];
+  if (!u.messages) u.messages = [];
 
-  player.xp ??= 0;
-  player.level ??= 1;
-
-  player.planted ??= 0;
-  player.fertilizer ??= 0;
-  player.premiumSeeds ??= 0;
-  player.luckyCharm ??= 0;
-
-  player.businessLevel ??= 0;
-
-  player.dailyStreak ??= 0;
-  player.lastDaily ??= 0;
-  player.lastWork ??= 0;
-  player.lastRaid ??= 0;
-
-  player.achievements ??= [];
-
-  player.papers ??= {};
-  player.papers.raw_cone ??= 0;
-  player.papers.king_size ??= 0;
-  player.papers.blunt_wrap ??= 0;
-
-  player.joints ??= 0;
-  player.carts ??= 0;
-  player.wax ??= 0;
-
-  player.jointUses ??= 0;
-  player.cartUses ??= 0;
-  player.waxUses ??= 0;
-
-  player.house ??= false;
-  player.houseLevel ??= 0;
-
-  player.vault ??= false;
-  player.vaultLevel ??= 0;
-  player.vaultWeed ??= 0;
-
-  player.security ??= 0;
-
-  player.job ??= null;
-  player.jobLevel ??= 0;
-  player.lastJob ??= 0;
-  player.applications ??= [];
-
-  player.jointsRolled ??= 0;
-  player.smokeSessions ??= 0;
-  player.raids ??= 0;
-  player.successfulRaids ??= 0;
-  player.jobsWorked ??= 0;
-
-  player.joined ??= Date.now();
-
-  return player;
+  return u;
 }
 
-/* =========================
-   UTILITIES
-========================= */
+function addXP(user, amount) {
+  user.xp += amount;
+
+  const needed = user.level * 100;
+
+  if (user.xp >= needed) {
+    user.xp -= needed;
+    user.level++;
+    return true;
+  }
+
+  return false;
+}
 
 function money(amount) {
-  return `$${Math.floor(amount).toLocaleString()}`;
+  return `$${amount.toLocaleString()}`;
 }
 
-function cooldownRemaining(lastTime, cooldown) {
-  const remaining =
-    cooldown - (Date.now() - lastTime);
+// ======================================================
+// REALISTIC IN-SERVER PRODUCTS
+// ======================================================
 
-  return Math.max(0, remaining);
-}
+const PRODUCTS = {
 
-function formatTime(ms) {
-  const seconds = Math.ceil(ms / 1000);
-
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-
-  const minutes = Math.floor(seconds / 60);
-
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-
-  return `${hours}h ${minutes % 60}m`;
-}
-
-function addXP(player, amount) {
-  player.xp += amount;
-
-  const needed =
-    player.level * 100;
-
-  let leveled = false;
-
-  while (player.xp >= needed) {
-    player.xp -= player.level * 100;
-    player.level++;
-    leveled = true;
-  }
-
-  return leveled;
-}
-
-function randomMarket() {
-  const change =
-    Math.floor(Math.random() * 21) - 10;
-
-  database.market.weed = Math.max(
-    10,
-    Math.min(
-      75,
-      database.market.weed + change
-    )
-  );
-
-  database.market.lastUpdate = Date.now();
-}
-
-function getUserById(id) {
-  return database.users[id] || null;
-}
-
-/* =========================
-   SECURITY
-========================= */
-
-const staffSessions = new Map();
-
-function isStaff(userId) {
-  const session = staffSessions.get(userId);
-
-  if (!session) {
-    return false;
-  }
-
-  if (Date.now() > session.expires) {
-    staffSessions.delete(userId);
-    return false;
-  }
-
-  return true;
-}
-
-async function securityAlert(message) {
-  console.log(`🚨 SECURITY: ${message}`);
-
-  if (!ALERT_CHANNEL_ID) {
-    return;
-  }
-
-  try {
-    const channel =
-      await client.channels.fetch(
-        ALERT_CHANNEL_ID
-      );
-
-    if (channel) {
-      await channel.send(
-        `🚨 **SECURITY ALERT**\n${message}`
-      );
-    }
-  } catch (error) {
-    console.error(
-      "Security alert failed:",
-      error.message
-    );
-  }
-}
-
-/* =========================
-   CELEBRITIES
-========================= */
-
-const celebrities = {
-  snoop: {
-    name: "Snoop Dogg",
-    emoji: "🌴",
-    message:
-      "Snoop's fictional Valley session is underway. Keep it chill."
+  // FLOWER
+  flower_1g: {
+    name: "1g Flower",
+    category: "flower",
+    price: 15,
+    amount: 1
   },
 
-  wiz: {
-    name: "Wiz Khalifa",
-    emoji: "🌿",
-    message:
-      "Wiz's fictional Valley session has you floating."
+  flower_3_5g: {
+    name: "3.5g Flower",
+    category: "flower",
+    price: 40,
+    amount: 3.5
   },
 
-  willie: {
-    name: "Willie Nelson",
-    emoji: "🎸",
-    message:
-      "Willie's fictional Valley session is nice and laid-back."
+  flower_7g: {
+    name: "7g Flower",
+    category: "flower",
+    price: 70,
+    amount: 7
   },
 
-  seth: {
-    name: "Seth Rogen",
-    emoji: "😂",
-    message:
-      "Seth's fictional Valley session has everybody laughing."
+  flower_14g: {
+    name: "14g Flower",
+    category: "flower",
+    price: 120,
+    amount: 14
   },
 
-  cheech: {
-    name: "Cheech & Chong",
-    emoji: "🔥",
-    message:
-      "Cheech & Chong's fictional Valley session is pure chaos."
+  flower_28g: {
+    name: "28g Flower",
+    category: "flower",
+    price: 200,
+    amount: 28
   },
 
-  flight: {
-    name: "FlightReacts",
-    emoji: "🏀",
-    message:
-      "Flight's fictional Valley session just went completely off the rails."
+  // CARTS
+  cart_1g: {
+    name: "1g 510 Cartridge",
+    category: "cart",
+    price: 35,
+    amount: 1
+  },
+
+  cart_half: {
+    name: "0.5g 510 Cartridge",
+    category: "cart",
+    price: 25,
+    amount: 0.5
+  },
+
+  // EDIBLES
+  gummy_10: {
+    name: "Fruit Gummies — 10 Pack",
+    category: "edible",
+    price: 25,
+    amount: 10
+  },
+
+  chocolate: {
+    name: "Chocolate Bar",
+    category: "edible",
+    price: 30,
+    amount: 1
+  },
+
+  fruit_chews: {
+    name: "Fruit Chews — 10 Pack",
+    category: "edible",
+    price: 28,
+    amount: 10
+  },
+
+  mints: {
+    name: "Cannabis Mints — 20 Pack",
+    category: "edible",
+    price: 24,
+    amount: 20
+  },
+
+  // BONGS
+  basic_bong: {
+    name: "Basic Glass Bong",
+    category: "bong",
+    price: 60
+  },
+
+  beaker_bong: {
+    name: "Glass Beaker Bong",
+    category: "bong",
+    price: 95
+  },
+
+  straight_bong: {
+    name: "Straight Tube Glass Bong",
+    category: "bong",
+    price: 120
+  },
+
+  // LIGHTERS
+  bic: {
+    name: "BIC Classic Lighter",
+    category: "lighter",
+    price: 3
+  },
+
+  clipper: {
+    name: "Clipper Lighter",
+    category: "lighter",
+    price: 5
+  },
+
+  torch: {
+    name: "Refillable Torch Lighter",
+    category: "lighter",
+    price: 15
+  },
+
+  // BATTERIES
+  battery_basic: {
+    name: "510 Battery",
+    category: "battery",
+    price: 20
+  },
+
+  battery_variable: {
+    name: "Variable Voltage 510 Battery",
+    category: "battery",
+    price: 35
+  },
+
+  // DRINKS
+  energy: {
+    name: "Energy Drink",
+    category: "drink",
+    price: 4
+  },
+
+  soda: {
+    name: "Soda",
+    category: "drink",
+    price: 3
+  },
+
+  water: {
+    name: "Bottled Water",
+    category: "drink",
+    price: 2
   }
 };
 
-/* =========================
-   JOBS
-========================= */
+// ======================================================
+// PHONES
+// ======================================================
 
-const jobs = {
-  dispensary: {
-    name: "Dispensary Worker",
-    min: 250,
-    max: 600
+const PHONES = {
+
+  iphone_17: {
+    name: "iPhone 17",
+    price: 799
   },
 
-  security: {
-    name: "Valley Security",
-    min: 300,
-    max: 700
+  iphone_17_pro: {
+    name: "iPhone 17 Pro",
+    price: 1099
   },
 
-  delivery: {
-    name: "Valley Delivery",
-    min: 200,
-    max: 550
+  iphone_17_pro_max: {
+    name: "iPhone 17 Pro Max",
+    price: 1199
   },
+
+  galaxy_s26: {
+    name: "Samsung Galaxy S26",
+    price: 799
+  },
+
+  galaxy_s26_ultra: {
+    name: "Samsung Galaxy S26 Ultra",
+    price: 1299
+  },
+
+  pixel_10: {
+    name: "Google Pixel 10",
+    price: 699
+  },
+
+  pixel_10_pro: {
+    name: "Google Pixel 10 Pro",
+    price: 999
+  }
+};
+
+// ======================================================
+// JOBS
+// ======================================================
+
+const JOBS = {
 
   budtender: {
     name: "Budtender",
-    min: 350,
-    max: 800
+    pay: 110
+  },
+
+  cashier: {
+    name: "Cashier",
+    pay: 90
+  },
+
+  security: {
+    name: "Security",
+    pay: 125
+  },
+
+  delivery: {
+    name: "Delivery Driver",
+    pay: 120
+  },
+
+  warehouse: {
+    name: "Warehouse Worker",
+    pay: 105
+  },
+
+  manager: {
+    name: "Store Manager",
+    pay: 160
+  },
+
+  mechanic: {
+    name: "Mechanic",
+    pay: 145
+  },
+
+  bartender: {
+    name: "Bartender",
+    pay: 130
   }
 };
 
-/* =========================
-   SLASH COMMANDS
-========================= */
+// ======================================================
+// BUSINESSES
+// ======================================================
+
+const BUSINESS_TYPES = {
+  dispensary: {
+    name: "Dispensary",
+    price: 15000,
+    income: 850
+  },
+
+  smoke_shop: {
+    name: "Smoke Shop",
+    price: 10000,
+    income: 650
+  },
+
+  restaurant: {
+    name: "Restaurant",
+    price: 20000,
+    income: 1000
+  },
+
+  bar: {
+    name: "Bar",
+    price: 25000,
+    income: 1200
+  },
+
+  auto_shop: {
+    name: "Auto Shop",
+    price: 30000,
+    income: 1400
+  },
+
+  clothing_store: {
+    name: "Clothing Store",
+    price: 12000,
+    income: 750
+  }
+};
+
+// ======================================================
+// CLIENT
+// ======================================================
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers
+  ]
+});
+
+// ======================================================
+// COMMANDS
+// ======================================================
 
 const commands = [
 
   new SlashCommandBuilder()
     .setName("valley")
-    .setDescription(
-      "Open your Stoner Valley dashboard"
-    ),
+    .setDescription("View the Stoner Valley economy"),
 
   new SlashCommandBuilder()
     .setName("info")
-    .setDescription(
-      "View all Stoner Valley commands"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("balance")
-    .setDescription(
-      "Check your Valley cash"
-    ),
+    .setDescription("View all Stoner Valley commands"),
 
   new SlashCommandBuilder()
     .setName("profile")
-    .setDescription(
-      "View your Valley profile"
-    ),
+    .setDescription("View your Valley profile"),
 
   new SlashCommandBuilder()
     .setName("inventory")
-    .setDescription(
-      "View your Valley inventory"
-    ),
+    .setDescription("View everything you own"),
 
   new SlashCommandBuilder()
-    .setName("plant")
-    .setDescription(
-      "Plant fictional Valley seeds"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("harvest")
-    .setDescription(
-      "Harvest your fictional crop"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("shop")
-    .setDescription(
-      "View the Valley shop"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("buy")
-    .setDescription(
-      "Buy an item from the shop"
-    )
-    .addStringOption(option =>
-      option
-        .setName("item")
-        .setDescription("Item to buy")
-        .setRequired(true)
-        .addChoices(
-          { name: "Seeds", value: "seeds" },
-          { name: "Fertilizer", value: "fertilizer" },
-          { name: "Premium Seeds", value: "premium" },
-          { name: "Lucky Charm", value: "charm" },
-          { name: "RAW Cone", value: "raw_cone" },
-          { name: "King Size Papers", value: "king_size" },
-          { name: "Blunt Wrap", value: "blunt_wrap" },
-          { name: "Fictional Weed Cart", value: "cart" },
-          { name: "Fictional Wax", value: "wax" }
-        )
-    )
-    .addIntegerOption(option =>
-      option
-        .setName("amount")
-        .setDescription("Amount to buy")
-        .setMinValue(1)
-        .setMaxValue(50)
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("sell")
-    .setDescription(
-      "Sell your fictional Valley weed"
-    )
-    .addIntegerOption(option =>
-      option
-        .setName("amount")
-        .setDescription("Amount to sell")
-        .setMinValue(1)
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("market")
-    .setDescription(
-      "Check the fictional Valley market"
-    ),
+    .setName("balance")
+    .setDescription("View your cash and bank"),
 
   new SlashCommandBuilder()
     .setName("daily")
-    .setDescription(
-      "Claim your daily Valley reward"
-    ),
+    .setDescription("Claim your daily Valley money"),
 
   new SlashCommandBuilder()
-    .setName("work")
-    .setDescription(
-      "Work a quick Valley side job"
-    ),
+    .setName("jobs")
+    .setDescription("View available jobs"),
 
   new SlashCommandBuilder()
-    .setName("risk")
-    .setDescription(
-      "Take a fictional gamble with your cash"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("missions")
-    .setDescription(
-      "View Valley missions"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("achievements")
-    .setDescription(
-      "View your achievements"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("leaderboard")
-    .setDescription(
-      "View the richest Valley members"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("joint")
-    .setDescription(
-      "Roll a fictional joint"
+    .setName("job")
+    .setDescription("Manage your job")
+    .addSubcommand(sub =>
+      sub
+        .setName("apply")
+        .setDescription("Apply for a job")
+        .addStringOption(opt =>
+          opt
+            .setName("job")
+            .setDescription("Job you want")
+            .setRequired(true)
+            .addChoices(
+              ...Object.entries(JOBS).map(([value, job]) => ({
+                name: job.name,
+                value
+              }))
+            )
+        )
     )
-    .addStringOption(option =>
-      option
-        .setName("paper")
-        .setDescription("Paper type")
-        .setRequired(true)
-        .addChoices(
-          { name: "RAW Cone", value: "raw_cone" },
-          { name: "King Size", value: "king_size" },
-          { name: "Blunt Wrap", value: "blunt_wrap" }
+    .addSubcommand(sub =>
+      sub
+        .setName("work")
+        .setDescription("Work your current job")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("quit")
+        .setDescription("Quit your current job")
+    ),
+
+  new SlashCommandBuilder()
+    .setName("bank")
+    .setDescription("Manage your bank")
+    .addSubcommand(sub =>
+      sub
+        .setName("deposit")
+        .setDescription("Deposit money")
+        .addIntegerOption(opt =>
+          opt
+            .setName("amount")
+            .setDescription("Amount")
+            .setRequired(true)
+            .setMinValue(1)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("withdraw")
+        .setDescription("Withdraw money")
+        .addIntegerOption(opt =>
+          opt
+            .setName("amount")
+            .setDescription("Amount")
+            .setRequired(true)
+            .setMinValue(1)
         )
     ),
 
   new SlashCommandBuilder()
-    .setName("use")
-    .setDescription(
-      "Use a Valley item"
+    .setName("dispensary")
+    .setDescription("Browse and buy Valley products")
+    .addSubcommand(sub =>
+      sub
+        .setName("browse")
+        .setDescription("View the dispensary menu")
     )
-    .addStringOption(option =>
-      option
-        .setName("item")
-        .setDescription("Item to use")
-        .setRequired(true)
-        .addChoices(
-          { name: "Joint", value: "joint" },
-          { name: "Cart", value: "cart" },
-          { name: "Wax", value: "wax" }
+    .addSubcommand(sub =>
+      sub
+        .setName("buy")
+        .setDescription("Buy a dispensary product")
+        .addStringOption(opt =>
+          opt
+            .setName("item")
+            .setDescription("Choose what you want")
+            .setRequired(true)
+            .addChoices(
+              ...Object.entries(PRODUCTS).map(([value, item]) => ({
+                name: `${item.name} — $${item.price}`,
+                value
+              }))
+            )
         )
     ),
 
   new SlashCommandBuilder()
-    .setName("celebrity")
-    .setDescription(
-      "Start a fictional celebrity session"
-    )
-    .addStringOption(option =>
-      option
-        .setName("person")
-        .setDescription("Choose a celebrity")
+    .setName("cart")
+    .setDescription("Use one of your cannabis cartridges"),
+
+  new SlashCommandBuilder()
+    .setName("smoke")
+    .setDescription("Smoke flower using your smoking setup"),
+
+  new SlashCommandBuilder()
+    .setName("edible")
+    .setDescription("Use one of your edibles")
+    .addStringOption(opt =>
+      opt
+        .setName("type")
+        .setDescription("Choose an edible")
         .setRequired(true)
         .addChoices(
-          { name: "Snoop Dogg", value: "snoop" },
-          { name: "Wiz Khalifa", value: "wiz" },
-          { name: "Willie Nelson", value: "willie" },
-          { name: "Seth Rogen", value: "seth" },
-          { name: "Cheech & Chong", value: "cheech" },
-          { name: "FlightReacts", value: "flight" }
+          { name: "Fruit Gummies", value: "gummy_10" },
+          { name: "Chocolate Bar", value: "chocolate" },
+          { name: "Fruit Chews", value: "fruit_chews" },
+          { name: "Cannabis Mints", value: "mints" }
         )
     ),
 
   new SlashCommandBuilder()
-    .setName("property")
-    .setDescription(
-      "Manage your Valley property"
-    )
-    .addStringOption(option =>
-      option
-        .setName("action")
-        .setDescription("Property action")
+    .setName("bong")
+    .setDescription("Use one of your bongs")
+    .addStringOption(opt =>
+      opt
+        .setName("type")
+        .setDescription("Choose your bong")
         .setRequired(true)
         .addChoices(
-          { name: "View", value: "view" },
-          { name: "Buy House", value: "buy" },
-          { name: "Upgrade House", value: "upgrade" },
-          { name: "Vault", value: "vault" },
-          { name: "Deposit", value: "deposit" },
-          { name: "Withdraw", value: "withdraw" }
+          { name: "Basic Glass Bong", value: "basic_bong" },
+          { name: "Glass Beaker Bong", value: "beaker_bong" },
+          { name: "Straight Tube Glass Bong", value: "straight_bong" }
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName("lighter")
+    .setDescription("Use one of your lighters")
+    .addStringOption(opt =>
+      opt
+        .setName("type")
+        .setDescription("Choose your lighter")
+        .setRequired(true)
+        .addChoices(
+          { name: "BIC Classic", value: "bic" },
+          { name: "Clipper", value: "clipper" },
+          { name: "Refillable Torch", value: "torch" }
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName("drink")
+    .setDescription("Drink something you own")
+    .addStringOption(opt =>
+      opt
+        .setName("type")
+        .setDescription("Choose a drink")
+        .setRequired(true)
+        .addChoices(
+          { name: "Energy Drink", value: "energy" },
+          { name: "Soda", value: "soda" },
+          { name: "Bottled Water", value: "water" }
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName("phone")
+    .setDescription("Manage your phone")
+    .addSubcommand(sub =>
+      sub
+        .setName("buy")
+        .setDescription("Buy a phone")
+        .addStringOption(opt =>
+          opt
+            .setName("model")
+            .setDescription("Choose a phone")
+            .setRequired(true)
+            .addChoices(
+              ...Object.entries(PHONES).map(([value, phone]) => ({
+                name: `${phone.name} — $${phone.price}`,
+                value
+              }))
+            )
         )
     )
-    .addIntegerOption(option =>
-      option
-        .setName("amount")
-        .setDescription("Amount of fictional weed")
-        .setMinValue(1)
+    .addSubcommand(sub =>
+      sub
+        .setName("view")
+        .setDescription("View your phone")
+    ),
+
+  new SlashCommandBuilder()
+    .setName("text")
+    .setDescription("Send a text message")
+    .addUserOption(opt =>
+      opt
+        .setName("user")
+        .setDescription("Who you want to text")
+        .setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt
+        .setName("message")
+        .setDescription("Your message")
+        .setRequired(true)
+        .setMaxLength(500)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("texts")
+    .setDescription("View your recent text messages"),
+
+  new SlashCommandBuilder()
+    .setName("house")
+    .setDescription("Manage your house")
+    .addSubcommand(sub =>
+      sub
+        .setName("view")
+        .setDescription("View your house")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("buy")
+        .setDescription("Buy a house")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("upgrade")
+        .setDescription("Upgrade storage")
     ),
 
   new SlashCommandBuilder()
     .setName("business")
-    .setDescription(
-      "Manage your Valley business"
-    )
-    .addStringOption(option =>
-      option
-        .setName("action")
-        .setDescription("Business action")
-        .setRequired(true)
-        .addChoices(
-          { name: "View", value: "view" },
-          { name: "Upgrade", value: "upgrade" }
+    .setDescription("Run your own business")
+    .addSubcommand(sub =>
+      sub
+        .setName("create")
+        .setDescription("Become a business owner")
+        .addStringOption(opt =>
+          opt
+            .setName("type")
+            .setDescription("Business type")
+            .setRequired(true)
+            .addChoices(
+              ...Object.entries(BUSINESS_TYPES).map(([value, business]) => ({
+                name: `${business.name} — ${money(business.price)}`,
+                value
+              }))
+            )
         )
+        .addStringOption(opt =>
+          opt
+            .setName("name")
+            .setDescription("Name your business")
+            .setRequired(true)
+            .setMaxLength(40)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("view")
+        .setDescription("View your businesses")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("collect")
+        .setDescription("Collect business earnings")
     ),
 
   new SlashCommandBuilder()
-    .setName("job")
-    .setDescription(
-      "Manage your Valley job"
-    )
-    .addStringOption(option =>
-      option
-        .setName("action")
-        .setDescription("Job action")
-        .setRequired(true)
-        .addChoices(
-          { name: "List", value: "list" },
-          { name: "Apply", value: "apply" },
-          { name: "Work", value: "work" },
-          { name: "Quit", value: "quit" }
-        )
-    )
-    .addStringOption(option =>
-      option
-        .setName("job")
-        .setDescription("Job to apply for")
-        .addChoices(
-          { name: "Dispensary Worker", value: "dispensary" },
-          { name: "Valley Security", value: "security" },
-          { name: "Valley Delivery", value: "delivery" },
-          { name: "Budtender", value: "budtender" }
-        )
-    ),
-
-  new SlashCommandBuilder()
-    .setName("raid")
-    .setDescription(
-      "Attempt a fictional vault raid"
-    )
-    .addUserOption(option =>
-      option
-        .setName("user")
-        .setDescription("Member to raid")
-        .setRequired(true)
-    ),
+    .setName("leaderboard")
+    .setDescription("View the Valley leaderboard"),
 
   new SlashCommandBuilder()
     .setName("dice")
-    .setDescription(
-      "Roll the Valley dice"
-    ),
+    .setDescription("Roll the dice"),
 
   new SlashCommandBuilder()
     .setName("coinflip")
-    .setDescription(
-      "Flip a Valley coin"
-    ),
+    .setDescription("Flip a coin"),
 
   new SlashCommandBuilder()
     .setName("eightball")
-    .setDescription(
-      "Ask the Valley 8-ball"
-    )
-    .addStringOption(option =>
-      option
+    .setDescription("Ask the Valley 8-ball a question")
+    .addStringOption(opt =>
+      opt
         .setName("question")
         .setDescription("Ask a question")
         .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("high")
-    .setDescription(
-      "Take a fictional highness test"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("smoke")
-    .setDescription(
-      "Start a fictional smoke session"
-    ),
-
-  new SlashCommandBuilder()
-    .setName("staff")
-    .setDescription(
-      "Stoner Valley staff controls"
     )
-    .addSubcommand(sub =>
-      sub
-        .setName("login")
-        .setDescription("Log into staff controls")
-        .addStringOption(option =>
-          option
-            .setName("password")
-            .setDescription("Staff password")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName("logout")
-        .setDescription("Log out of staff controls")
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName("panel")
-        .setDescription("Open staff panel")
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName("stats")
-        .setDescription("View bot statistics")
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName("addcash")
-        .setDescription("Give a member fictional cash")
-        .addUserOption(option =>
-          option
-            .setName("user")
-            .setDescription("Member")
-            .setRequired(true)
-        )
-        .addIntegerOption(option =>
-          option
-            .setName("amount")
-            .setDescription("Amount")
-            .setMinValue(1)
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName("addweed")
-        .setDescription("Give a member fictional weed")
-        .addUserOption(option =>
-          option
-            .setName("user")
-            .setDescription("Member")
-            .setRequired(true)
-        )
-        .addIntegerOption(option =>
-          option
-            .setName("amount")
-            .setDescription("Amount")
-            .setMinValue(1)
-            .setRequired(true)
-        )
-    )
-
 ];
 
-/* =========================
-   INFO
-========================= */
+// ======================================================
+// REGISTER SLASH COMMANDS
+// ======================================================
 
-function infoText() {
-  return [
-    "🌿 **STONER VALLEY COMMANDS**",
-    "",
-    "**💰 Economy**",
-    "`/balance` — Check your cash",
-    "`/daily` — Claim your daily reward",
-    "`/work` — Work for cash",
-    "`/risk` — Risk your cash",
-    "`/market` — Check the market",
-    "`/buy` — Buy shop items",
-    "`/sell` — Sell fictional weed",
-    "",
-    "**🌱 Growing**",
-    "`/plant` — Plant seeds",
-    "`/harvest` — Harvest your crop",
-    "`/inventory` — View inventory",
-    "",
-    "**🏠 Property**",
-    "`/property` — Manage your house and vault",
-    "`/business` — Manage your business",
-    "",
-    "**💨 Sessions**",
-    "`/joint` — Roll a fictional joint",
-    "`/use` — Use a fictional item",
-    "`/celebrity` — Fictional celebrity session",
-    "`/smoke` — Start a smoke session",
-    "`/high` — Take a fictional highness test",
-    "",
-    "**🎮 Fun**",
-    "`/dice` — Roll dice",
-    "`/coinflip` — Flip a coin",
-    "`/eightball` — Ask the Valley 8-ball",
-    "",
-    "**💼 Jobs & Missions**",
-    "`/job` — Manage your job",
-    "`/missions` — View missions",
-    "`/achievements` — View achievements",
-    "`/leaderboard` — View leaderboard",
-    "`/raid` — Attempt a fictional vault raid",
-    "",
-    "**🌿 Valley**",
-    "`/valley` — Open your dashboard",
-    "`/profile` — View your profile",
-    "`/shop` — View the shop",
-    "`/info` — View this menu",
-    "",
-    "**🛡️ Staff**",
-    "`/staff login` — Staff login",
-    "`/staff panel` — Staff panel",
-    "`/staff stats` — Bot statistics",
-    "`/staff addcash` — Give fictional cash",
-    "`/staff addweed` — Give fictional weed"
-  ].join("\n");
-}
+async function registerCommands() {
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-/* =========================
-   READY / COMMAND REGISTRATION
-========================= */
-
-client.once("ready", async () => {
-  console.log(
-    `🌿 Logged in as ${client.user.tag}`
+  await rest.put(
+    Routes.applicationGuildCommands(
+      client.user.id,
+      GUILD_ID
+    ),
+    {
+      body: commands.map(command => command.toJSON())
+    }
   );
 
+  console.log("✅ Slash commands registered.");
+}
+
+// ======================================================
+// READY
+// ======================================================
+
+client.once("ready", async () => {
+  console.log(`🌿 Logged in as ${client.user.tag}`);
+
   try {
-    const rest = new REST({
-      version: "10"
-    }).setToken(TOKEN);
-
-    console.log(
-      `📡 Registering commands to Stoner Valley: ${GUILD_ID}`
-    );
-
-    await rest.put(
-      Routes.applicationGuildCommands(
-        client.user.id,
-        GUILD_ID
-      ),
-      {
-        body: commands.map(command =>
-          command.toJSON()
-        )
-      }
-    );
-
-    console.log(
-      "✅ Slash commands registered."
-    );
-
-    console.log(
-      "🌿 Stoner Valley is online!"
-    );
-
+    await registerCommands();
   } catch (error) {
-    console.error(
-      "❌ Slash command registration failed:",
-      error
-    );
-
-    await securityAlert(
-      `Slash command registration failed: ${error.message}`
-    );
+    console.error("❌ Command registration failed:", error);
   }
+
+  console.log("🌿 Stoner Valley is online!");
 });
 
-/* =========================
-   INTERACTIONS
-========================= */
-
-client.on(
-  "interactionCreate",
-  async interaction => {
-
-    if (!interaction.isChatInputCommand()) {
-      return;
-    }
-
-    const command =
-      interaction.commandName;
-
-    const player =
-      getUser(interaction.user);
-
-    try {
-
-      /* =====================
-         VALLEY
-      ===================== */
-
-      if (command === "valley") {
-
-        const embed =
-          new EmbedBuilder()
-            .setTitle("🌿 STONER VALLEY")
-            .setDescription(
-              `Welcome back, **${interaction.user.username}**.`
-            )
-            .addFields(
-              {
-                name: "💰 Cash",
-                value: money(player.cash),
-                inline: true
-              },
-              {
-                name: "🌿 Weed",
-                value: `${player.weed}`,
-                inline: true
-              },
-              {
-                name: "⭐ Level",
-                value: `${player.level}`,
-                inline: true
-              },
-              {
-                name: "💨 Joints",
-                value: `${player.joints}`,
-                inline: true
-              },
-              {
-                name: "🛒 Carts",
-                value: `${player.carts}`,
-                inline: true
-              },
-              {
-                name: "🧪 Wax",
-                value: `${player.wax}`,
-                inline: true
-              }
-            )
-            .setFooter({
-              text: "Stoner Valley • Fictional economy"
-            });
-
-        return interaction.reply({
-          embeds: [embed]
-        });
-      }
-
-      /* =====================
-         INFO
-      ===================== */
-
-      if (command === "info") {
-        return interaction.reply({
-          content: infoText()
-        });
-      }
-
-      /* =====================
-         BALANCE
-      ===================== */
-
-      if (command === "balance") {
-        return interaction.reply(
-          `💰 **${interaction.user.username}** has **${money(player.cash)}**.`
-        );
-      }
-
-      /* =====================
-         PROFILE
-      ===================== */
-
-      if (command === "profile") {
-
-        return interaction.reply(
-          [
-            `🌿 **${interaction.user.username}'s Valley Profile**`,
-            "",
-            `💰 Cash: ${money(player.cash)}`,
-            `🌿 Weed: ${player.weed}`,
-            `⭐ Level: ${player.level}`,
-            `✨ XP: ${player.xp}`,
-            `🌱 Seeds: ${player.seeds}`,
-            `🏠 House: ${player.house ? "Owned" : "None"}`,
-            `🏢 Business Level: ${player.businessLevel}`,
-            `💼 Job: ${player.job ? jobs[player.job]?.name : "None"}`,
-            `🏆 Achievements: ${player.achievements.length}`
-          ].join("\n")
-        );
-      }
-
-      /* =====================
-         INVENTORY
-      ===================== */
-
-      if (command === "inventory") {
-
-        return interaction.reply(
-          [
-            "🎒 **VALLEY INVENTORY**",
-            "",
-            `🌿 Weed: ${player.weed}/${player.storage}`,
-            `🌱 Seeds: ${player.seeds}`,
-            `🧪 Fertilizer: ${player.fertilizer}`,
-            `✨ Premium Seeds: ${player.premiumSeeds}`,
-            `🍀 Lucky Charms: ${player.luckyCharm}`,
-            "",
-            `📜 RAW Cones: ${player.papers.raw_cone}`,
-            `📄 King Size: ${player.papers.king_size}`,
-            `🟫 Blunt Wraps: ${player.papers.blunt_wrap}`,
-            "",
-            `💨 Joints: ${player.joints}`,
-            `🛒 Carts: ${player.carts}`,
-            `🧪 Wax: ${player.wax}`
-          ].join("\n")
-        );
-      }
-
-      /* =====================
-         PLANT
-      ===================== */
-
-      if (command === "plant") {
-
-        if (player.seeds <= 0) {
-          return interaction.reply(
-            "🌱 You're out of seeds. Visit `/shop`."
-          );
-        }
-
-        player.seeds--;
-        player.planted++;
-
-        const leveled =
-          addXP(player, 15);
-
-        saveDatabase();
-
-        return interaction.reply(
-          `🌱 You planted a fictional Valley seed. You now have **${player.seeds}** seeds left.` +
-          (leveled
-            ? `\n🎉 **LEVEL UP!** You reached level **${player.level}**!`
-            : "")
-        );
-      }
-
-      /* =====================
-         HARVEST
-      ===================== */
-
-      if (command === "harvest") {
-
-        if (player.planted <= 0) {
-          return interaction.reply(
-            "🌱 You don't have anything planted."
-          );
-        }
-
-        player.planted--;
-
-        let amount =
-          Math.floor(Math.random() * 11) + 10;
-
-        if (player.fertilizer > 0) {
-          player.fertilizer--;
-          amount += 10;
-        }
-
-        if (
-          player.premiumSeeds > 0 &&
-          Math.random() < 0.5
-        ) {
-          player.premiumSeeds--;
-          amount += 15;
-        }
-
-        if (
-          player.luckyCharm > 0 &&
-          Math.random() < 0.25
-        ) {
-          player.luckyCharm--;
-          amount *= 2;
-        }
-
-        const space =
-          Math.max(
-            0,
-            player.storage - player.weed
-          );
-
-        const harvested =
-          Math.min(amount, space);
-
-        player.weed += harvested;
-
-        const leveled =
-          addXP(player, 25);
-
-        if (
-          harvested >= 35 &&
-          !player.achievements.includes(
-            "Big Harvest"
-          )
-        ) {
-          player.achievements.push(
-            "Big Harvest"
-          );
-        }
-
-        saveDatabase();
-
-        return interaction.reply(
-          `🌿 You harvested **${harvested}** fictional weed.` +
-          `\n📦 Storage: **${player.weed}/${player.storage}**` +
-          (leveled
-            ? `\n🎉 **LEVEL UP!** Level **${player.level}**!`
-            : "")
-        );
-      }
-
-      /* =====================
-         SHOP
-      ===================== */
-
-      if (command === "shop") {
-
-        return interaction.reply(
-          [
-            "🛒 **STONER VALLEY SHOP**",
-            "",
-            "🌱 Seeds — $50",
-            "🧪 Fertilizer — $150",
-            "✨ Premium Seeds — $300",
-            "🍀 Lucky Charm — $500",
-            "📜 RAW Cone — $75",
-            "📄 King Size Papers — $100",
-            "🟫 Blunt Wrap — $125",
-            "🛒 Fictional Weed Cart — $750",
-            "🧪 Fictional Wax — $900",
-            "",
-            "Use `/buy` to purchase."
-          ].join("\n")
-        );
-      }
-
-      /* =====================
-         BUY
-      ===================== */
-
-      if (command === "buy") {
-
-        const item =
-          interaction.options.getString(
-            "item"
-          );
-
-        const amount =
-          interaction.options.getInteger(
-            "amount"
-          );
-
-        const prices = {
-          seeds: 50,
-          fertilizer: 150,
-          premium: 300,
-          charm: 500,
-          raw_cone: 75,
-          king_size: 100,
-          blunt_wrap: 125,
-          cart: 750,
-          wax: 900
-        };
-
-        const price =
-          prices[item];
-
-        const total =
-          price * amount;
-
-        if (player.cash < total) {
-          return interaction.reply(
-            `❌ You need **${money(total)}** but only have **${money(player.cash)}**.`
-          );
-        }
-
-        player.cash -= total;
-
-        if (item === "seeds") {
-          player.seeds += amount;
-        }
-
-        if (item === "fertilizer") {
-          player.fertilizer += amount;
-        }
-
-        if (item === "premium") {
-          player.premiumSeeds += amount;
-        }
-
-        if (item === "charm") {
-          player.luckyCharm += amount;
-        }
-
-        if (
-          item === "raw_cone" ||
-          item === "king_size" ||
-          item === "blunt_wrap"
-        ) {
-          player.papers[item] += amount;
-        }
-
-        if (item === "cart") {
-          player.carts += amount;
-        }
-
-        if (item === "wax") {
-          player.wax += amount;
-        }
-
-        saveDatabase();
-
-        return interaction.reply(
-          `🛒 Bought **${amount}x ${item}** for **${money(total)}**.`
-        );
-      }
-
-      /* =====================
-         SELL
-      ===================== */
-
-      if (command === "sell") {
-
-        const amount =
-          interaction.options.getInteger(
-            "amount"
-          );
-
-        if (player.weed < amount) {
-          return interaction.reply(
-            "❌ You don't have enough fictional weed."
-          );
-        }
-
-        const total =
-          amount *
-          database.market.weed;
-
-        player.weed -= amount;
-        player.cash += total;
-
-        addXP(player, 10);
-
-        saveDatabase();
-
-        return interaction.reply(
-          `💰 Sold **${amount}** fictional weed for **${money(total)}**.`
-        );
-      }
-
-      /* =====================
-         MARKET
-      ===================== */
-
-      if (command === "market") {
-
-        if (
-          Date.now() -
-            database.market.lastUpdate >
-          10 * 60 * 1000
-        ) {
-          randomMarket();
-          saveDatabase();
-        }
-
-        return interaction.reply(
-          `📈 **Valley Market**\n\n🌿 Fictional Weed Price: **${money(database.market.weed)} each**`
-        );
-      }
-
-      /* =====================
-         DAILY
-      ===================== */
-
-      if (command === "daily") {
-
-        const cooldown =
-          24 * 60 * 60 * 1000;
-
-        const remaining =
-          cooldownRemaining(
-            player.lastDaily,
-            cooldown
-          );
-
-        if (remaining > 0) {
-          return interaction.reply(
-            `⏰ Come back in **${formatTime(remaining)}**.`
-          );
-        }
-
-        player.dailyStreak++;
-
-        const reward =
-          275 +
-          Math.min(
-            player.dailyStreak * 25,
-            500
-          );
-
-        player.cash += reward;
-        player.seeds += 2;
-        player.lastDaily = Date.now();
-
-        const leveled =
-          addXP(player, 30);
-
-        saveDatabase();
-
-        return interaction.reply(
-          [
-            "🎁 **DAILY REWARD!**",
-            "",
-            `💰 +${money(reward)}`,
-            "🌱 +2 Seeds",
-            `🔥 Streak: ${player.dailyStreak}`,
-            leveled
-              ? `🎉 LEVEL UP! You're now level ${player.level}!`
-              : ""
-          ]
-            .filter(Boolean)
-            .join("\n")
-        );
-      }
-
-      /* =====================
-         WORK
-      ===================== */
-
-      if (command === "work") {
-
-        const cooldown =
-          30 * 60 * 1000;
-
-        const remaining =
-          cooldownRemaining(
-            player.lastWork,
-            cooldown
-          );
-
-        if (remaining > 0) {
-          return interaction.reply(
-            `⏰ You're tired. Work again in **${formatTime(remaining)}**.`
-          );
-        }
-
-        const reward =
-          Math.floor(
-            Math.random() * 201
-          ) + 100;
-
-        player.cash += reward;
-        player.lastWork = Date.now();
-
-        const leveled =
-          addXP(player, 20);
-
-        saveDatabase();
-
-        return interaction.reply(
-          `💼 You worked a Valley side job and earned **${money(reward)}**.` +
-          (leveled
-            ? `\n🎉 **LEVEL UP!** Level ${player.level}!`
-            : "")
-        );
-      }
-
-      /* =====================
-         RISK
-      ===================== */
-
-      if (command === "risk") {
-
-        if (player.cash < 50) {
-          return interaction.reply(
-            "❌ You need at least $50 to play."
-          );
-        }
-
-        const bet =
-          Math.min(
-            player.cash,
-            Math.max(
-              50,
-              Math.floor(
-                Math.random() *
-                  Math.min(
-                    500,
-                    player.cash
-                  )
-              ) + 1
-            )
-          );
-
-        const win =
-          Math.random() < 0.45;
-
-        if (win) {
-          player.cash += bet * 2;
-
-          return interaction.reply(
-            `🎰 **YOU WON!**\n💰 Profit: **${money(bet * 2)}**`
-          );
-        }
-
-        player.cash -= bet;
-
-        saveDatabase();
-
-        return interaction.reply(
-          `💀 **YOU LOST!**\n💸 Lost: **${money(bet)}**`
-        );
-      }
-
-      /* =====================
-         MISSIONS
-      ===================== */
-
-      if (command === "missions") {
-
-        return interaction.reply(
-          [
-            "🎯 **VALLEY MISSIONS**",
-            "",
-            "🌱 Plant seeds",
-            "🌿 Harvest crops",
-            "💼 Work jobs",
-            "💨 Roll joints",
-            "🏠 Buy property",
-            "💰 Build your cash",
-            "🏆 Unlock achievements",
-            "⚔️ Attempt fictional raids",
-            "",
-            "More missions can be added later."
-          ].join("\n")
-        );
-      }
-
-      /* =====================
-         ACHIEVEMENTS
-      ===================== */
-
-      if (command === "achievements") {
-
-        const list =
-          player.achievements.length
-            ? player.achievements
-                .map(
-                  achievement =>
-                    `🏆 ${achievement}`
-                )
-                .join("\n")
-            : "No achievements yet.";
-
-        return interaction.reply(
-          `🏆 **YOUR ACHIEVEMENTS**\n\n${list}`
-        );
-      }
-
-      /* =====================
-         LEADERBOARD
-      ===================== */
-
-      if (command === "leaderboard") {
-
-        const leaders =
-          Object.values(database.users)
-            .sort(
-              (a, b) =>
-                b.cash - a.cash
-            )
-            .slice(0, 10);
-
-        const text =
-          leaders.length
-            ? leaders
-                .map(
-                  (u, i) =>
-                    `**${i + 1}.** ${u.name} — ${money(u.cash)}`
-                )
-                .join("\n")
-            : "Nobody is on the leaderboard yet.";
-
-        return interaction.reply(
-          `🏆 **VALLEY LEADERBOARD**\n\n${text}`
-        );
-      }
-
-      /* =====================
-         JOINT
-      ===================== */
-
-      if (command === "joint") {
-
-        const paper =
-          interaction.options.getString(
-            "paper"
-          );
-
-        if (player.papers[paper] <= 0) {
-          return interaction.reply(
-            "❌ You don't have that type of paper."
-          );
-        }
-
-        if (player.weed < 5) {
-          return interaction.reply(
-            "❌ You need 5 fictional weed."
-          );
-        }
-
-        player.papers[paper]--;
-        player.weed -= 5;
-        player.joints++;
-        player.jointsRolled++;
-
-        addXP(player, 20);
-
-        if (
-          player.jointsRolled >= 10 &&
-          !player.achievements.includes(
-            "Valley Roller"
-          )
-        ) {
-          player.achievements.push(
-            "Valley Roller"
-          );
-        }
-
-        saveDatabase();
-
-        return interaction.reply(
-          `💨 You rolled a fictional joint using **${paper}**.\nYou now have **${player.joints}** joints.`
-        );
-      }
-
-      /* =====================
-         USE
-      ===================== */
-
-      if (command === "use") {
-
-        const item =
-          interaction.options.getString(
-            "item"
-          );
-
-        if (
-          item === "joint" &&
-          player.joints <= 0
-        ) {
-          return interaction.reply(
-            "❌ You don't have a joint."
-          );
-        }
-
-        if (
-          item === "cart" &&
-          player.carts <= 0
-        ) {
-          return interaction.reply(
-            "❌ You don't have a cart."
-          );
-        }
-
-        if (
-          item === "wax" &&
-          player.wax <= 0
-        ) {
-          return interaction.reply(
-            "❌ You don't have wax."
-          );
-        }
-
-        if (item === "joint") {
-          player.joints--;
-          player.jointUses++;
-        }
-
-        if (item === "cart") {
-          player.carts--;
-          player.cartUses++;
-        }
-
-        if (item === "wax") {
-          player.wax--;
-          player.waxUses++;
-        }
-
-        addXP(player, 10);
-        player.smokeSessions++;
-
-        saveDatabase();
-
-        return interaction.reply(
-          `🔥 You used a fictional **${item}** and gained some Valley XP.`
-        );
-      }
-
-      /* =====================
-         CELEBRITY
-      ===================== */
-
-      if (command === "celebrity") {
-
-        const person =
-          interaction.options.getString(
-            "person"
-          );
-
-        const celebrity =
-          celebrities[person];
-
-        addXP(player, 10);
-
-        saveDatabase();
-
-        return interaction.reply(
-          `${celebrity.emoji} **${celebrity.name}**\n\n${celebrity.message}\n\n*This is fictional roleplay and is not affiliated with or endorsed by the person mentioned.*`
-        );
-      }
-
-      /* =====================
-         PROPERTY
-      ===================== */
-
-      if (command === "property") {
-
-        const action =
-          interaction.options.getString(
-            "action"
-          );
-
-        const amount =
-          interaction.options.getInteger(
-            "amount"
-          );
-
-        if (action === "view") {
-
-          return interaction.reply(
-            [
-              "🏠 **VALLEY PROPERTY**",
-              "",
-              `🏠 House: ${player.house ? "Owned" : "Not owned"}`,
-              `⭐ House Level: ${player.houseLevel}`,
-              `🔐 Vault: ${player.vault ? "Owned" : "Not owned"}`,
-              `⭐ Vault Level: ${player.vaultLevel}`,
-              `🌿 Vault Weed: ${player.vaultWeed}`,
-              `🛡️ Security: Level ${player.security}`
-            ].join("\n")
-          );
-        }
-
-        if (action === "buy") {
-
-          if (player.house) {
-            return interaction.reply(
-              "🏠 You already own a house."
-            );
-          }
-
-          if (player.cash < 5000) {
-            return interaction.reply(
-              "❌ You need $5,000."
-            );
-          }
-
-          player.cash -= 5000;
-          player.house = true;
-          player.houseLevel = 1;
-          player.storage += 50;
-
-          saveDatabase();
-
-          return interaction.reply(
-            "🏠 **House purchased!**\nYour storage increased by 50."
-          );
-        }
-
-        if (action === "upgrade") {
-
-          if (!player.house) {
-            return interaction.reply(
-              "❌ Buy a house first."
-            );
-          }
-
-          const cost =
-            5000 * player.houseLevel;
-
-          if (player.cash < cost) {
-            return interaction.reply(
-              `❌ You need ${money(cost)}.`
-            );
-          }
-
-          player.cash -= cost;
-          player.houseLevel++;
-          player.storage += 50;
-
-          saveDatabase();
-
-          return interaction.reply(
-            `🏠 House upgraded to level **${player.houseLevel}**.\n📦 Storage increased by 50.`
-          );
-        }
-
-        if (action === "vault") {
-
-          if (!player.house) {
-            return interaction.reply(
-              "❌ Buy a house first."
-            );
-          }
-
-          if (!player.vault) {
-
-            if (player.cash < 7500) {
-              return interaction.reply(
-                "❌ You need $7,500."
-              );
-            }
-
-            player.cash -= 7500;
-            player.vault = true;
-            player.vaultLevel = 1;
-
-            saveDatabase();
-
-            return interaction.reply(
-              "🔐 **Vault purchased!** Capacity: 100 fictional weed."
-            );
-          }
-
-          const capacity =
-            player.vaultLevel * 100;
-
-          return interaction.reply(
-            `🔐 Vault Level: **${player.vaultLevel}**\n🌿 Stored: **${player.vaultWeed}/${capacity}**`
-          );
-        }
-
-        if (action === "deposit") {
-
-          if (!player.vault) {
-            return interaction.reply(
-              "❌ You need a vault first."
-            );
-          }
-
-          if (!amount) {
-            return interaction.reply(
-              "❌ Enter an amount."
-            );
-          }
-
-          const capacity =
-            player.vaultLevel * 100;
-
-          if (player.weed < amount) {
-            return interaction.reply(
-              "❌ You don't have that much fictional weed."
-            );
-          }
-
-          if (
-            player.vaultWeed + amount >
-            capacity
-          ) {
-            return interaction.reply(
-              `❌ Your vault can only hold ${capacity}.`
-            );
-          }
-
-          player.weed -= amount;
-          player.vaultWeed += amount;
-
-          saveDatabase();
-
-          return interaction.reply(
-            `🔐 Deposited **${amount}** fictional weed into your vault.`
-          );
-        }
-
-        if (action === "withdraw") {
-
-          if (!player.vault) {
-            return interaction.reply(
-              "❌ You need a vault first."
-            );
-          }
-
-          if (!amount) {
-            return interaction.reply(
-              "❌ Enter an amount."
-            );
-          }
-
-          if (player.vaultWeed < amount) {
-            return interaction.reply(
-              "❌ Your vault doesn't contain that much."
-            );
-          }
-
-          if (
-            player.weed + amount >
-            player.storage
-          ) {
-            return interaction.reply(
-              "❌ You don't have enough storage space."
-            );
-          }
-
-          player.vaultWeed -= amount;
-          player.weed += amount;
-
-          saveDatabase();
-
-          return interaction.reply(
-            `🔐 Withdrew **${amount}** fictional weed.`
-          );
-        }
-      }
-
-      /* =====================
-         BUSINESS
-      ===================== */
-
-      if (command === "business") {
-
-        const action =
-          interaction.options.getString(
-            "action"
-          );
-
-        if (action === "view") {
-
-          return interaction.reply(
-            [
-              "🏢 **VALLEY BUSINESS**",
-              "",
-              `⭐ Business Level: ${player.businessLevel}`,
-              `💰 Passive rate: ${money(player.businessLevel * 100)} per collection`,
-              "",
-              "Use `/business upgrade` to level up."
-            ].join("\n")
-          );
-        }
-
-        if (action === "upgrade") {
-
-          const cost =
-            1000 *
-            (player.businessLevel + 1);
-
-          if (player.cash < cost) {
-            return interaction.reply(
-              `❌ You need ${money(cost)}.`
-            );
-          }
-
-          player.cash -= cost;
-          player.businessLevel++;
-
-          saveDatabase();
-
-          return interaction.reply(
-            `🏢 Business upgraded to level **${player.businessLevel}**.`
-          );
-        }
-      }
-
-      /* =====================
-         JOB
-      ===================== */
-
-      if (command === "job") {
-
-        const action =
-          interaction.options.getString(
-            "action"
-          );
-
-        const jobChoice =
-          interaction.options.getString(
-            "job"
-          );
-
-        if (action === "list") {
-
-          return interaction.reply(
-            [
-              "💼 **VALLEY JOBS**",
-              "",
-              "🌿 Dispensary Worker — $250–$600",
-              "🛡️ Valley Security — $300–$700",
-              "🚚 Valley Delivery — $200–$550",
-              "🔥 Budtender — $350–$800",
-              "",
-              "Use `/job apply` with a job selected."
-            ].join("\n")
-          );
-        }
-
-        if (action === "apply") {
-
-          if (!jobChoice) {
-            return interaction.reply(
-              "❌ Choose a job."
-            );
-          }
-
-          player.job = jobChoice;
-
-          if (
-            !player.applications.includes(
-              jobChoice
-            )
-          ) {
-            player.applications.push(
-              jobChoice
-            );
-          }
-
-          saveDatabase();
-
-          return interaction.reply(
-            `💼 You are now working as a **${jobs[jobChoice].name}**.`
-          );
-        }
-
-        if (action === "work") {
-
-          if (!player.job) {
-            return interaction.reply(
-              "❌ You don't have a job. Apply with `/job apply`."
-            );
-          }
-
-          const remaining =
-            cooldownRemaining(
-              player.lastJob,
-              30 * 60 * 1000
-            );
-
-          if (remaining > 0) {
-            return interaction.reply(
-              `⏰ Work again in **${formatTime(remaining)}**.`
-            );
-          }
-
-          const selectedJob =
-            jobs[player.job];
-
-          const reward =
-            Math.floor(
-              Math.random() *
-                (selectedJob.max -
-                  selectedJob.min +
-                  1)
-            ) +
-            selectedJob.min +
-            player.jobLevel * 50;
-
-          player.cash += reward;
-          player.lastJob = Date.now();
-          player.jobsWorked++;
-
-          const leveled =
-            addXP(player, 30);
-
-          if (
-            player.jobsWorked >= 10 &&
-            !player.achievements.includes(
-              "Hard Worker"
-            )
-          ) {
-            player.achievements.push(
-              "Hard Worker"
-            );
-          }
-
-          saveDatabase();
-
-          return interaction.reply(
-            `💼 You worked as a **${selectedJob.name}** and earned **${money(reward)}**.` +
-            (leveled
-              ? `\n🎉 **LEVEL UP!** Level ${player.level}!`
-              : "")
-          );
-        }
-
-        if (action === "quit") {
-
-          if (!player.job) {
-            return interaction.reply(
-              "❌ You don't currently have a job."
-            );
-          }
-
-          player.job = null;
-
-          saveDatabase();
-
-          return interaction.reply(
-            "💼 You quit your Valley job."
-          );
-        }
-      }
-
-      /* =====================
-         RAID
-      ===================== */
-
-      if (command === "raid") {
-
-        const target =
-          interaction.options.getUser(
-            "user"
-          );
-
-        if (
-          target.id ===
-          interaction.user.id
-        ) {
-          return interaction.reply(
-            "❌ You can't raid yourself."
-          );
-        }
-
-        if (target.bot) {
-          return interaction.reply(
-            "❌ You can't raid a bot."
-          );
-        }
-
-        if (player.level < 5) {
-          return interaction.reply(
-            "❌ You need to be level 5 to raid."
-          );
-        }
-
-        const victim =
-          getUserById(target.id);
-
-        if (!victim || !victim.vault) {
-          return interaction.reply(
-            "❌ That member doesn't have a vault."
-          );
-        }
-
-        const remaining =
-          cooldownRemaining(
-            player.lastRaid,
-            60 * 60 * 1000
-          );
-
-        if (remaining > 0) {
-          return interaction.reply(
-            `⏰ You can raid again in **${formatTime(remaining)}**.`
-          );
-        }
-
-        player.lastRaid = Date.now();
-        player.raids++;
-
-        const securityChance =
-          Math.min(
-            0.75,
-            0.20 +
-              victim.security * 0.10
-          );
-
-        if (
-          Math.random() <
-          securityChance
-        ) {
-
-          const fine =
-            Math.min(
-              player.cash,
-              Math.floor(
-                Math.random() *
-                  401
-              ) + 100
-            );
-
-          player.cash -= fine;
-
-          saveDatabase();
-
-          await securityAlert(
-            `${interaction.user.username} was caught attempting a fictional raid on ${target.username}.`
-          );
-
-          return interaction.reply(
-            `🚨 **CAUGHT!**\n💸 Fine: **${money(fine)}**`
-          );
-        }
-
-        const stolen =
-          Math.floor(
-            victim.vaultWeed *
-              (Math.random() * 0.25 + 0.10)
-          );
-
-        const space =
-          Math.max(
-            0,
-            player.storage -
-              player.weed
-          );
-
-        const actual =
-          Math.min(
-            stolen,
-            victim.vaultWeed,
-            space
-          );
-
-        victim.vaultWeed -= actual;
-        player.weed += actual;
-
-        player.successfulRaids++;
-
-        addXP(player, 50);
-
-        saveDatabase();
-
-        return interaction.reply(
-          `⚔️ **RAID SUCCESSFUL!**\n\n🌿 You stole **${actual}** fictional weed from ${target}.`
-        );
-      }
-
-      /* =====================
-         DICE
-      ===================== */
-
-      if (command === "dice") {
-
-        const roll =
-          Math.floor(
-            Math.random() * 6
-          ) + 1;
-
-        addXP(player, 5);
-        saveDatabase();
-
-        return interaction.reply(
-          `🎲 You rolled a **${roll}**.`
-        );
-      }
-
-      /* =====================
-         COINFLIP
-      ===================== */
-
-      if (command === "coinflip") {
-
-        const result =
-          Math.random() < 0.5
-            ? "HEADS"
-            : "TAILS";
-
-        addXP(player, 5);
-        saveDatabase();
-
-        return interaction.reply(
-          `🪙 The coin landed on **${result}**.`
-        );
-      }
-
-      /* =====================
-         EIGHTBALL
-      ===================== */
-
-      if (command === "eightball") {
-
-        const answers = [
-          "Absolutely.",
-          "Probably.",
-          "Signs point to yes.",
-          "Maybe.",
-          "Ask again later.",
-          "Not looking good.",
-          "Probably not.",
-          "The Valley says no."
-        ];
-
-        const answer =
-          answers[
-            Math.floor(
-              Math.random() *
-                answers.length
-            )
-          ];
-
-        addXP(player, 5);
-        saveDatabase();
-
-        return interaction.reply(
-          `🎱 **Valley 8-Ball:** ${answer}`
-        );
-      }
-
-      /* =====================
-         HIGH
-      ===================== */
-
-      if (command === "high") {
-
-        const levels = [
-          "😌 Chillin'",
-          "😮‍💨 Feeling good",
-          "😂 Everything is hilarious",
-          "🌌 Lost in the Valley",
-          "🚀 Absolutely floating"
-        ];
-
-        const result =
-          levels[
-            Math.floor(
-              Math.random() *
-                levels.length
-            )
-          ];
-
-        addXP(player, 10);
-        saveDatabase();
-
-        return interaction.reply(
-          `🌿 **Your fictional highness level:** ${result}`
-        );
-      }
-
-      /* =====================
-         SMOKE
-      ===================== */
-
-      if (command === "smoke") {
-
-        player.smokeSessions++;
-
-        addXP(player, 15);
-
-        saveDatabase();
-
-        return interaction.reply(
-          "😮‍💨 **Smoke session started.**\n\nKick back, relax, and enjoy the Valley."
-        );
-      }
-
-      /* =====================
-         STAFF
-      ===================== */
-
-      if (command === "staff") {
-
-        const action =
-          interaction.options.getSubcommand();
-
-        if (action === "login") {
-
-          const password =
-            interaction.options.getString(
-              "password"
-            );
-
-          if (
-            password !==
-            STAFF_PASSWORD
-          ) {
-
-            await securityAlert(
-              `${interaction.user.username} failed a staff login attempt.`
-            );
-
-            return interaction.reply({
-              content:
-                "❌ Incorrect staff password.",
-              ephemeral: true
-            });
-          }
-
-          staffSessions.set(
-            interaction.user.id,
-            {
-              expires:
-                Date.now() +
-                2 * 60 * 60 * 1000
-            }
-          );
-
-          return interaction.reply({
-            content:
-              "🛡️ **Staff login successful.** Session active for 2 hours.",
-            ephemeral: true
-          });
-        }
-
-        if (!isStaff(interaction.user.id)) {
-          return interaction.reply({
-            content:
-              "❌ You are not logged into staff controls.",
-            ephemeral: true
-          });
-        }
-
-        if (action === "logout") {
-
-          staffSessions.delete(
-            interaction.user.id
-          );
-
-          return interaction.reply({
-            content:
-              "🛡️ Staff session ended.",
-            ephemeral: true
-          });
-        }
-
-        if (action === "panel") {
-
-          return interaction.reply({
-            content: [
-              "🛡️ **STAFF PANEL**",
-              "",
-              "`/staff stats` — Bot statistics",
-              "`/staff addcash` — Give fictional cash",
-              "`/staff addweed` — Give fictional weed",
-              "`/staff logout` — End staff session"
-            ].join("\n"),
-            ephemeral: true
-          });
-        }
-
-        if (action === "stats") {
-
-          const users =
-            Object.keys(
-              database.users
-            ).length;
-
-          const totalCash =
-            Object.values(
-              database.users
-            ).reduce(
-              (sum, u) =>
-                sum + (u.cash || 0),
-              0
-            );
-
-          return interaction.reply({
-            content: [
-              "📊 **STONER VALLEY STATS**",
-              "",
-              `👥 Users: ${users}`,
-              `💰 Total Cash: ${money(totalCash)}`,
-              `📦 Database: Active`,
-              `🌿 Market Price: ${money(database.market.weed)}`
-            ].join("\n"),
-            ephemeral: true
-          });
-        }
-
-        if (action === "addcash") {
-
-          const target =
-            interaction.options.getUser(
-              "user"
-            );
-
-          const amount =
-            interaction.options.getInteger(
-              "amount"
-            );
-
-          const targetPlayer =
-            getUser(target);
-
-          targetPlayer.cash += amount;
-
-          saveDatabase();
-
-          return interaction.reply({
-            content:
-              `💰 Added **${money(amount)}** to ${target.username}.`,
-            ephemeral: true
-          });
-        }
-
-        if (action === "addweed") {
-
-          const target =
-            interaction.options.getUser(
-              "user"
-            );
-
-          const amount =
-            interaction.options.getInteger(
-              "amount"
-            );
-
-          const targetPlayer =
-            getUser(target);
-
-          targetPlayer.weed += amount;
-
-          saveDatabase();
-
-          return interaction.reply({
-            content:
-              `🌿 Added **${amount}** fictional weed to ${target.username}.`,
-            ephemeral: true
-          });
-        }
-      }
-
-    } catch (error) {
-
-      console.error(
-        "❌ Interaction error:",
-        error
+// ======================================================
+// INTERACTIONS
+// ======================================================
+
+client.on("interactionCreate", async interaction => {
+
+  if (!interaction.isChatInputCommand()) return;
+
+  const user = createUser(
+    interaction.user.id,
+    interaction.user.username
+  );
+
+  const command = interaction.commandName;
+
+  // ====================================================
+  // VALLEY
+  // ====================================================
+
+  if (command === "valley") {
+    const embed = new EmbedBuilder()
+      .setTitle("🌿 Stoner Valley")
+      .setDescription(
+        "Your personal in-server economy. Work, shop, own businesses, buy a phone and build your Valley life."
+      )
+      .addFields(
+        { name: "💵 Cash", value: money(user.cash), inline: true },
+        { name: "🏦 Bank", value: money(user.bank), inline: true },
+        { name: "⭐ Level", value: `${user.level}`, inline: true }
       );
 
-      if (!interaction.replied) {
-        await interaction.reply({
-          content:
-            "❌ Something went wrong while running that command.",
-          ephemeral: true
-        });
-      }
-
-      await securityAlert(
-        `Interaction error: ${error.message}`
-      );
-    }
+    return interaction.reply({ embeds: [embed] });
   }
-);
 
-/* =========================
-   AUTO SAVE / BACKUPS
-========================= */
+  // ====================================================
+  // INFO
+  // ====================================================
 
-setInterval(
-  saveDatabase,
-  30 * 1000
-);
+  if (command === "info") {
+    return interaction.reply({
+      content:
+`🌿 **STONER VALLEY COMMANDS**
 
-setInterval(
-  backupDatabase,
-  5 * 60 * 1000
-);
+💵 **Economy**
+\`/balance\` — Cash and bank
+\`/daily\` — Daily money
+\`/leaderboard\` — Top Valley members
+\`/dice\` — Roll the dice
+\`/coinflip\` — Flip a coin
 
-setInterval(
-  () => {
-    randomMarket();
+💼 **Work**
+\`/jobs\` — View jobs
+\`/job apply\` — Apply
+\`/job work\` — Work
+\`/job quit\` — Quit
+
+🏪 **Shopping**
+\`/dispensary browse\` — View products
+\`/dispensary buy\` — Buy products
+\`/inventory\` — View your items
+
+📱 **Phone**
+\`/phone buy\` — Buy a phone
+\`/phone view\` — View phone
+\`/text\` — Send a text
+\`/texts\` — View messages
+
+🏠 **Property**
+\`/house buy\`
+\`/house view\`
+\`/house upgrade\`
+
+🏢 **Businesses**
+\`/business create\`
+\`/business view\`
+\`/business collect\`
+
+🌿 **Use Your Items**
+\`/smoke\`
+\`/cart\`
+\`/edible\`
+\`/bong\`
+\`/lighter\`
+\`/drink\`
+
+🎱 \`/eightball\` — Ask the 8-ball`
+    });
+  }
+
+  // ====================================================
+  // PROFILE
+  // ====================================================
+
+  if (command === "profile") {
+    return interaction.reply({
+      content:
+`🌿 **${interaction.user.username}'s Profile**
+
+⭐ Level: ${user.level}
+✨ XP: ${user.xp}/${user.level * 100}
+💵 Cash: ${money(user.cash)}
+🏦 Bank: ${money(user.bank)}
+💼 Job: ${user.job ? JOBS[user.job].name : "Unemployed"}
+📱 Phone: ${user.phone ? PHONES[user.phone].name : "None"}
+🏠 House: ${user.house.owned ? "Owned" : "None"}
+🏢 Businesses: ${user.businesses.length}`
+    });
+  }
+
+  // ====================================================
+  // BALANCE
+  // ====================================================
+
+  if (command === "balance") {
+    return interaction.reply({
+      content:
+`💵 **Balance**
+
+Cash: ${money(user.cash)}
+🏦 Bank: ${money(user.bank)}
+💰 Total: ${money(user.cash + user.bank)}`
+    });
+  }
+
+  // ====================================================
+  // INVENTORY
+  // ====================================================
+
+  if (command === "inventory") {
+
+    const edibles = Object.entries(user.inventory.edibles)
+      .map(([id, amount]) => `${PRODUCTS[id]?.name || id}: ${amount}`)
+      .join("\n") || "None";
+
+    const bongs = Object.entries(user.inventory.bongs)
+      .map(([id, amount]) => `${PRODUCTS[id]?.name || id}: ${amount}`)
+      .join("\n") || "None";
+
+    const lighters = Object.entries(user.inventory.lighters)
+      .map(([id, amount]) => `${PRODUCTS[id]?.name || id}: ${amount}`)
+      .join("\n") || "None";
+
+    const drinks = Object.entries(user.inventory.drinks)
+      .map(([id, amount]) => `${PRODUCTS[id]?.name || id}: ${amount}`)
+      .join("\n") || "None";
+
+    const batteries = Object.entries(user.inventory.batteries)
+      .map(([id, amount]) => `${PRODUCTS[id]?.name || id}: ${amount}`)
+      .join("\n") || "None";
+
+    return interaction.reply({
+      content:
+`🎒 **${interaction.user.username}'s Inventory**
+
+🌿 Flower: **${user.inventory.flower}g**
+🛒 Cartridges: **${user.inventory.carts}**
+
+🍬 **Edibles**
+${edibles}
+
+🔥 **Lighters**
+${lighters}
+
+💨 **Bongs**
+${bongs}
+
+🔋 **510 Batteries**
+${batteries}
+
+🥤 **Drinks**
+${drinks}
+
+📱 Phone: ${user.phone ? PHONES[user.phone].name : "None"}
+
+🏠 House: ${user.house.owned ? "Owned" : "None"}
+📦 Storage: ${user.house.storage}g`
+    });
+  }
+
+  // ====================================================
+  // DAILY
+  // ====================================================
+
+  if (command === "daily") {
+
+    const now = Date.now();
+    const day = 86400000;
+
+    if (now - user.dailyClaimed < day) {
+      const remaining = day - (now - user.dailyClaimed);
+      const hours = Math.ceil(remaining / 3600000);
+
+      return interaction.reply({
+        content: `⏰ You already claimed your daily. Come back in about **${hours} hours**.`
+      });
+    }
+
+    const amount = 250 + user.level * 25;
+
+    user.cash += amount;
+    user.dailyClaimed = now;
+
+    const leveled = addXP(user, 25);
+
     saveDatabase();
-  },
-  10 * 60 * 1000
-);
 
-/* =========================
-   ERROR HANDLING
-========================= */
+    return interaction.reply({
+      content:
+`💵 **Daily claimed!**
 
-process.on(
-  "unhandledRejection",
-  error => {
-    console.error(
-      "❌ Unhandled rejection:",
-      error
-    );
+You received **${money(amount)}**.
+⭐ +25 XP${leveled ? `\n🎉 You reached **Level ${user.level}**!` : ""}`
+    });
   }
-);
 
-process.on(
-  "uncaughtException",
-  error => {
-    console.error(
-      "❌ Uncaught exception:",
-      error
-    );
+  // ====================================================
+  // JOBS
+  // ====================================================
+
+  if (command === "jobs") {
+
+    const list = Object.values(JOBS)
+      .map(job => `💼 **${job.name}** — ${money(job.pay)} per shift`)
+      .join("\n");
+
+    return interaction.reply({
+      content: `💼 **Available Valley Jobs**\n\n${list}`
+    });
   }
-);
 
-/* =========================
-   LOGIN
-========================= */
+  // ====================================================
+  // JOB
+  // ====================================================
+
+  if (command === "job") {
+
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "apply") {
+
+      const job = interaction.options.getString("job");
+
+      if (user.job) {
+        return interaction.reply({
+          content: `❌ You already work as **${JOBS[user.job].name}**. Quit first.`
+        });
+      }
+
+      user.job = job;
+      saveDatabase();
+
+      return interaction.reply({
+        content: `✅ You're now working as a **${JOBS[job].name}**.`
+      });
+    }
+
+    if (sub === "work") {
+
+      if (!user.job) {
+        return interaction.reply({
+          content: "❌ You don't have a job. Use `/jobs` first."
+        });
+      }
+
+      const now = Date.now();
+
+      if (now - user.lastWork < 3600000) {
+        const remaining = 3600000 - (now - user.lastWork);
+        const minutes = Math.ceil(remaining / 60000);
+
+        return interaction.reply({
+          content: `⏰ You're done for now. Come back in about **${minutes} minutes**.`
+        });
+      }
+
+      const job = JOBS[user.job];
+
+      user.cash += job.pay;
+      user.lastWork = now;
+
+      const leveled = addXP(user, 50);
+
+      saveDatabase();
+
+      return interaction.reply({
+        content:
+`💼 **Shift complete!**
+
+Job: ${job.name}
+💵 Pay: ${money(job.pay)}
+⭐ XP: +50${leveled ? `\n🎉 Level ${user.level} reached!` : ""}`
+      });
+    }
+
+    if (sub === "quit") {
+
+      if (!user.job) {
+        return interaction.reply({
+          content: "❌ You don't currently have a job."
+        });
+      }
+
+      const oldJob = JOBS[user.job].name;
+
+      user.job = null;
+      saveDatabase();
+
+      return interaction.reply({
+        content: `✅ You quit your job as **${oldJob}**.`
+      });
+    }
+  }
+
+  // ====================================================
+  // BANK
+  // ====================================================
+
+  if (command === "bank") {
+
+    const sub = interaction.options.getSubcommand();
+    const amount = interaction.options.getInteger("amount");
+
+    if (sub === "deposit") {
+
+      if (user.cash < amount) {
+        return interaction.reply({
+          content: "❌ You don't have enough cash."
+        });
+      }
+
+      user.cash -= amount;
+      user.bank += amount;
+
+      saveDatabase();
+
+      return interaction.reply({
+        content: `🏦 Deposited **${money(amount)}**.`
+      });
+    }
+
+    if (sub === "withdraw") {
+
+      if (user.bank < amount) {
+        return interaction.reply({
+          content: "❌ You don't have enough money in your bank."
+        });
+      }
+
+      user.bank -= amount;
+      user.cash += amount;
+
+      saveDatabase();
+
+      return interaction.reply({
+        content: `🏦 Withdrew **${money(amount)}**.`
+      });
+    }
+  }
+
+  // ====================================================
+  // DISPENSARY
+  // ====================================================
+
+  if (command === "dispensary") {
+
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "browse") {
+
+      const flower = Object.values(PRODUCTS)
+        .filter(x => x.category === "flower")
+        .map(x => `🌿 ${x.name} — ${money(x.price)}`)
+        .join("\n");
+
+      const carts = Object.values(PRODUCTS)
+        .filter(x => x.category === "cart")
+        .map(x => `🛒 ${x.name} — ${money(x.price)}`)
+        .join("\n");
+
+      const edibles = Object.values(PRODUCTS)
+        .filter(x => x.category === "edible")
+        .map(x => `🍬 ${x.name} — ${money(x.price)}`)
+        .join("\n");
+
+      const bongs = Object.values(PRODUCTS)
+        .filter(x => x.category === "bong")
+        .map(x => `💨 ${x.name} — ${money(x.price)}`)
+        .join("\n");
+
+      const lighters = Object.values(PRODUCTS)
+        .filter(x => x.category === "lighter")
+        .map(x => `🔥 ${x.name} — ${money(x.price)}`)
+        .join("\n");
+
+      const batteries = Object.values(PRODUCTS)
+        .filter(x => x.category === "battery")
+        .map(x => `🔋 ${x.name} — ${money(x.price)}`)
+        .join("\n");
+
+      const drinks = Object.values(PRODUCTS)
+        .filter(x => x.category === "drink")
+        .map(x => `🥤 ${x.name} — ${money(x.price)}`)
+        .join("\n");
+
+      return interaction.reply({
+        content:
+`🏪 **STONER VALLEY DISPENSARY**
+
+🌿 **FLOWER**
+${flower}
+
+🛒 **CARTRIDGES**
+${carts}
+
+🍬 **EDIBLES**
+${edibles}
+
+💨 **BONGS**
+${bongs}
+
+🔥 **LIGHTERS**
+${lighters}
+
+🔋 **510 BATTERIES**
+${batteries}
+
+🥤 **DRINKS**
+${drinks}
+
+Use **/dispensary buy** and select exactly what you want.`
+      });
+    }
+
+    if (sub === "buy") {
+
+      const itemId = interaction.options.getString("item");
+      const item = PRODUCTS[itemId];
+
+      if (!item) {
+        return interaction.reply({
+          content: "❌ That item doesn't exist."
+        });
+      }
+
+      if (user.cash < item.price) {
+        return interaction.reply({
+          content:
+`❌ You can't afford that.
+
+Price: ${money(item.price)}
+Your cash: ${money(user.cash)}`
+        });
+      }
+
+      user.cash -= item.price;
+
+      if (item.category === "flower") {
+        user.inventory.flower += item.amount;
+      }
+
+      if (item.category === "cart") {
+        user.inventory.carts += item.amount;
+      }
+
+      if (
+        item.category === "edible" ||
+        item.category === "bong" ||
+        item.category === "lighter" ||
+        item.category === "drink" ||
+        item.category === "battery"
+      ) {
+        if (!user.inventory[item.category + "s"]) {
+          // handled below
+        }
+      }
+
+      if (item.category === "edible") {
+        user.inventory.edibles[itemId] =
+          (user.inventory.edibles[itemId] || 0) + 1;
+      }
+
+      if (item.category === "bong") {
+        user.inventory.bongs[itemId] =
+          (user.inventory.bongs[itemId] || 0) + 1;
+      }
+
+      if (item.category === "lighter") {
+        user.inventory.lighters[itemId] =
+          (user.inventory.lighters[itemId] || 0) + 1;
+      }
+
+      if (item.category === "drink") {
+        user.inventory.drinks[itemId] =
+          (user.inventory.drinks[itemId] || 0) + 1;
+      }
+
+      if (item.category === "battery") {
+        user.inventory.batteries[itemId] =
+          (user.inventory.batteries[itemId] || 0) + 1;
+      }
+
+      saveDatabase();
+
+      return interaction.reply({
+        content:
+`✅ **Purchase complete!**
+
+You bought: **${item.name}**
+Price: **${money(item.price)}**
+Cash remaining: **${money(user.cash)}**
+
+📦 The item is now in your inventory.`
+      });
+    }
+  }
+
+  // ====================================================
+  // SMOKE
+  // ====================================================
+
+  if (command === "smoke") {
+
+    if (user.inventory.flower < 1) {
+      return interaction.reply({
+        content: "❌ You need at least **1g of flower** first."
+      });
+    }
+
+    const lighterTotal = Object.values(user.inventory.lighters)
+      .reduce((a, b) => a + b, 0);
+
+    const bongTotal = Object.values(user.inventory.bongs)
+      .reduce((a, b) => a + b, 0);
+
+    if (lighterTotal < 1) {
+      return interaction.reply({
+        content: "❌ You need to buy a **lighter** first."
+      });
+    }
+
+    if (bongTotal < 1) {
+      return interaction.reply({
+        content: "❌ You need to buy a **bong** first."
+      });
+    }
+
+    user.inventory.flower -= 1;
+
+    addXP(user, 10);
+
+    saveDatabase();
+
+    return interaction.reply({
+      content:
+`💨 **Session complete.**
+
+You used **1g of flower** with your own bong and lighter.
+
+🌿 Flower remaining: **${user.inventory.flower}g**
+⭐ +10 XP`
+    });
+  }
+
+  // ====================================================
+  // CART
+  // ====================================================
+
+  if (command === "cart") {
+
+    if (user.inventory.carts < 0.5) {
+      return interaction.reply({
+        content: "❌ You don't have a cartridge. Buy one from the dispensary."
+      });
+    }
+
+    const batteries = Object.values(user.inventory.batteries)
+      .reduce((a, b) => a + b, 0);
+
+    if (batteries < 1) {
+      return interaction.reply({
+        content: "❌ You need a **510 battery** before you can use a cartridge."
+      });
+    }
+
+    user.inventory.carts -= 0.5;
+
+    addXP(user, 10);
+
+    saveDatabase();
+
+    return interaction.reply({
+      content:
+`🛒 **Cartridge used.**
+
+You used **0.5g** from your cartridge inventory.
+
+Remaining cartridges: **${user.inventory.carts}g**
+⭐ +10 XP`
+    });
+  }
+
+  // ====================================================
+  // EDIBLE
+  // ====================================================
+
+  if (command === "edible") {
+
+    const type = interaction.options.getString("type");
+    const amount = user.inventory.edibles[type] || 0;
+
+    if (amount < 1) {
+      return interaction.reply({
+        content: `❌ You don't own **${PRODUCTS[type].name}**.`
+      });
+    }
+
+    user.inventory.edibles[type]--;
+
+    addXP(user, 10);
+
+    saveDatabase();
+
+    return interaction.reply({
+      content:
+`🍬 **${PRODUCTS[type].name} used.**
+
+You had to purchase it before using it.
+
+Remaining: **${user.inventory.edibles[type]}**
+⭐ +10 XP`
+    });
+  }
+
+  // ====================================================
+  // BONG
+  // ====================================================
+
+  if (command === "bong") {
+
+    const type = interaction.options.getString("type");
+    const amount = user.inventory.bongs[type] || 0;
+
+    if (amount < 1) {
+      return interaction.reply({
+        content: `❌ You don't own **${PRODUCTS[type].name}**.`
+      });
+    }
+
+    const lighterTotal = Object.values(user.inventory.lighters)
+      .reduce((a, b) => a + b, 0);
+
+    if (lighterTotal < 1) {
+      return interaction.reply({
+        content: "❌ You also need a **lighter**."
+      });
+    }
+
+    return interaction.reply({
+      content:
+`💨 **${PRODUCTS[type].name}**
+
+You pulled out your own bong.
+
+🔥 Make sure you have flower and a lighter with \`/smoke\`.`
+    });
+  }
+
+  // ====================================================
+  // LIGHTER
+  // ====================================================
+
+  if (command === "lighter") {
+
+    const type = interaction.options.getString("type");
+    const amount = user.inventory.lighters[type] || 0;
+
+    if (amount < 1) {
+      return interaction.reply({
+        content: `❌ You don't own a **${PRODUCTS[type].name}**. Buy one first.`
+      });
+    }
+
+    return interaction.reply({
+      content: `🔥 You pulled out your **${PRODUCTS[type].name}**.`
+    });
+  }
+
+  // ====================================================
+  // DRINK
+  // ====================================================
+
+  if (command === "drink") {
+
+    const type = interaction.options.getString("type");
+    const amount = user.inventory.drinks[type] || 0;
+
+    if (amount < 1) {
+      return interaction.reply({
+        content: `❌ You don't own **${PRODUCTS[type].name}**.`
+      });
+    }
+
+    user.inventory.drinks[type]--;
+
+    saveDatabase();
+
+    return interaction.reply({
+      content:
+`🥤 You drank a **${PRODUCTS[type].name}**.
+
+Remaining: **${user.inventory.drinks[type]}**`
+    });
+  }
+
+  // ====================================================
+  // PHONE
+  // ====================================================
+
+  if (command === "phone") {
+
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "view") {
+
+      if (!user.phone) {
+        return interaction.reply({
+          content: "📱 You don't own a phone. Use `/phone buy`."
+        });
+      }
+
+      return interaction.reply({
+        content:
+`📱 **Your Phone**
+
+Model: **${PHONES[user.phone].name}**
+Purchase price: ${money(PHONES[user.phone].price)}
+
+📲 You can now use \`/text\`.`
+      });
+    }
+
+    if (sub === "buy") {
+
+      if (user.phone) {
+        return interaction.reply({
+          content:
+`📱 You already own a **${PHONES[user.phone].name}**.
+
+You can only own one phone at a time.`
+        });
+      }
+
+      const model = interaction.options.getString("model");
+      const phone = PHONES[model];
+
+      if (user.cash < phone.price) {
+        return interaction.reply({
+          content:
+`❌ You can't afford the **${phone.name}**.
+
+Price: ${money(phone.price)}
+Your cash: ${money(user.cash)}`
+        });
+      }
+
+      user.cash -= phone.price;
+      user.phone = model;
+
+      saveDatabase();
+
+      return interaction.reply({
+        content:
+`📱 **Phone purchased!**
+
+Model: **${phone.name}**
+Price: **${money(phone.price)}**
+Cash remaining: **${money(user.cash)}**
+
+📲 You can now use \`/text\` to message other Valley members.`
+      });
+    }
+  }
+
+  // ====================================================
+  // TEXT
+  // ====================================================
+
+  if (command === "text") {
+
+    if (!user.phone) {
+      return interaction.reply({
+        content: "📱 You need to buy a phone before you can text."
+      });
+    }
+
+    const target = interaction.options.getUser("user");
+    const message = interaction.options.getString("message");
+
+    if (target.bot) {
+      return interaction.reply({
+        content: "❌ You can't text a bot."
+      });
+    }
+
+    if (target.id === interaction.user.id) {
+      return interaction.reply({
+        content: "❌ You can't text yourself."
+      });
+    }
+
+    const receiver = createUser(
+      target.id,
+      target.username
+    );
+
+    receiver.messages.push({
+      from: interaction.user.id,
+      fromName: interaction.user.username,
+      message,
+      time: new Date().toISOString()
+    });
+
+    if (receiver.messages.length > 50) {
+      receiver.messages.shift();
+    }
+
+    saveDatabase();
+
+    return interaction.reply({
+      content:
+`📱 **Text sent**
+
+To: **${target.username}**
+From: **${interaction.user.username}**
+
+> ${message}`
+    });
+  }
+
+  // ====================================================
+  // TEXTS
+  // ====================================================
+
+  if (command === "texts") {
+
+    if (!user.phone) {
+      return interaction.reply({
+        content: "📱 Buy a phone first with `/phone buy`."
+      });
+    }
+
+    if (!user.messages.length) {
+      return interaction.reply({
+        content: "📭 You don't have any messages."
+      });
+    }
+
+    const recent = user.messages
+      .slice(-10)
+      .reverse()
+      .map(msg =>
+        `📱 **${msg.fromName}**\n> ${msg.message}`
+      )
+      .join("\n\n");
+
+    return interaction.reply({
+      content: `📥 **Recent Messages**\n\n${recent}`
+    });
+  }
+
+  // ====================================================
+  // HOUSE
+  // ====================================================
+
+  if (command === "house") {
+
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "view") {
+      return interaction.reply({
+        content:
+`🏠 **Your House**
+
+Owned: ${user.house.owned ? "Yes" : "No"}
+Storage: **${user.house.storage}g**`
+      });
+    }
+
+    if (sub === "buy") {
+
+      if (user.house.owned) {
+        return interaction.reply({
+          content: "🏠 You already own a house."
+        });
+      }
+
+      const price = 25000;
+
+      if (user.cash < price) {
+        return interaction.reply({
+          content: `❌ You need ${money(price)} to buy a house.`
+        });
+      }
+
+      user.cash -= price;
+      user.house.owned = true;
+
+      saveDatabase();
+
+      return interaction.reply({
+        content:
+`🏠 **House purchased!**
+
+Price: ${money(price)}
+Storage: ${user.house.storage}g`
+      });
+    }
+
+    if (sub === "upgrade") {
+
+      if (!user.house.owned) {
+        return interaction.reply({
+          content: "❌ Buy a house first."
+        });
+      }
+
+      const price = 10000;
+
+      if (user.cash < price) {
+        return interaction.reply({
+          content: `❌ You need ${money(price)}.`
+        });
+      }
+
+      user.cash -= price;
+      user.house.storage += 100;
+
+      saveDatabase();
+
+      return interaction.reply({
+        content:
+`🏠 **Storage upgraded!**
+
+New storage: **${user.house.storage}g**`
+      });
+    }
+  }
+
+  // ====================================================
+  // BUSINESS
+  // ====================================================
+
+  if (command === "business") {
+
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "create") {
+
+      const type = interaction.options.getString("type");
+      const name = interaction.options.getString("name");
+      const info = BUSINESS_TYPES[type];
+
+      if (user.cash < info.price) {
+        return interaction.reply({
+          content:
+`❌ You need ${money(info.price)} to start this business.
+
+Your cash: ${money(user.cash)}`
+        });
+      }
+
+      const id = String(db.nextBusinessId++);
+
+      db.businesses[id] = {
+        id,
+        owner: interaction.user.id,
+        name,
+        type,
+        income: info.income,
+        balance: 0,
+        level: 1
+      };
+
+      user.cash -= info.price;
+      user.businesses.push(id);
+
+      saveDatabase();
+
+      return interaction.reply({
+        content:
+`🏢 **Business created!**
+
+CEO: **${interaction.user.username}**
+Business: **${name}**
+Type: **${info.name}**
+Startup cost: **${money(info.price)}**
+Estimated income: **${money(info.income)} per collection**
+
+You are now the **CEO**.`
+      });
+    }
+
+    if (sub === "view") {
+
+      if (!user.businesses.length) {
+        return interaction.reply({
+          content: "🏢 You don't own a business yet."
+        });
+      }
+
+      const list = user.businesses
+        .map(id => db.businesses[id])
+        .filter(Boolean)
+        .map(b =>
+          `🏢 **${b.name}**
+Type: ${BUSINESS_TYPES[b.type].name}
+Level: ${b.level}
+Available earnings: ${money(b.balance)}`
+        )
+        .join("\n\n");
+
+      return interaction.reply({
+        content: `🏢 **Your Businesses**\n\n${list}`
+      });
+    }
+
+    if (sub === "collect") {
+
+      if (!user.businesses.length) {
+        return interaction.reply({
+          content: "❌ You don't own a business."
+        });
+      }
+
+      let total = 0;
+
+      for (const id of user.businesses) {
+        const business = db.businesses[id];
+
+        if (!business) continue;
+
+        business.balance +=
+          BUSINESS_TYPES[business.type].income *
+          business.level;
+
+        total += business.balance;
+        business.balance = 0;
+      }
+
+      user.cash += total;
+
+      saveDatabase();
+
+      return interaction.reply({
+        content:
+`🏢 **Business earnings collected!**
+
+You received **${money(total)}**.
+
+CEO: **${interaction.user.username}**`
+      });
+    }
+  }
+
+  // ====================================================
+  // LEADERBOARD
+  // ====================================================
+
+  if (command === "leaderboard") {
+
+    const users = Object.values(db.users)
+      .sort((a, b) =>
+        (b.cash + b.bank) - (a.cash + a.bank)
+      )
+      .slice(0, 10);
+
+    const list = users
+      .map((u, i) =>
+        `**${i + 1}.** ${u.username} — ${money(u.cash + u.bank)}`
+      )
+      .join("\n");
+
+    return interaction.reply({
+      content: `🏆 **STONER VALLEY LEADERBOARD**\n\n${list || "No members yet."}`
+    });
+  }
+
+  // ====================================================
+  // DICE
+  // ====================================================
+
+  if (command === "dice") {
+
+    const roll = Math.floor(Math.random() * 6) + 1;
+
+    return interaction.reply({
+      content: `🎲 You rolled a **${roll}**.`
+    });
+  }
+
+  // ====================================================
+  // COINFLIP
+  // ====================================================
+
+  if (command === "coinflip") {
+
+    const result =
+      Math.random() < 0.5
+        ? "Heads"
+        : "Tails";
+
+    return interaction.reply({
+      content: `🪙 **${result}**`
+    });
+  }
+
+  // ====================================================
+  // EIGHT BALL
+  // ====================================================
+
+  if (command === "eightball") {
+
+    const answers = [
+      "Absolutely.",
+      "Probably.",
+      "Looks good.",
+      "Ask again later.",
+      "Maybe.",
+      "I wouldn't count on it.",
+      "Signs point to yes.",
+      "Signs point to no."
+    ];
+
+    const answer =
+      answers[Math.floor(Math.random() * answers.length)];
+
+    return interaction.reply({
+      content: `🎱 **8-Ball:** ${answer}`
+    });
+  }
+
+});
+
+// ======================================================
+// AUTOMATIC SAVES
+// ======================================================
+
+setInterval(() => {
+  saveDatabase();
+}, 30000);
+
+setInterval(() => {
+  backupDatabase();
+}, 300000);
+
+// ======================================================
+// LOGIN
+// ======================================================
 
 client.login(TOKEN);
