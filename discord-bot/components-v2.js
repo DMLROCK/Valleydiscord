@@ -2,12 +2,18 @@
 
 const {
   ActionRowBuilder,
+  AttachmentBuilder,
   ContainerBuilder,
+  MediaGalleryBuilder,
   MessageFlags,
   SeparatorBuilder,
   StringSelectMenuBuilder,
   TextDisplayBuilder
 } = require("discord.js");
+const path = require("node:path");
+
+const LEAF_BANNER_NAME = "valley-leaf-banner.gif";
+const LEAF_BANNER_PATH = path.join(__dirname, "assets", "leaf-banner.gif");
 
 const NAVIGATION_OPTIONS = [
   { label: "Home", value: "home", description: "Overview and quick links" },
@@ -17,7 +23,8 @@ const NAVIGATION_OPTIONS = [
   { label: "Inventory", value: "inventory", description: "Your items and quick-use actions" },
   { label: "Phone", value: "phone", description: "Phone and message shortcuts" },
   { label: "Property", value: "property", description: "House and storage" },
-  { label: "Businesses", value: "business", description: "Business ownership and earnings" }
+  { label: "Businesses", value: "business", description: "Business ownership and earnings" },
+  { label: "Sports", value: "sports", description: "Fictional Valley League games and bets" }
 ];
 
 const SECTION_TITLES = {
@@ -28,7 +35,9 @@ const SECTION_TITLES = {
   inventory: "Inventory",
   phone: "Phone",
   property: "Property",
-  business: "Businesses"
+  business: "Businesses",
+  sports: "Valley Sports",
+  staff: "Staff Controls"
 };
 
 function truncateText(text, maxLength) {
@@ -98,17 +107,24 @@ function makeSelectRow(customId, placeholder, options) {
   return new ActionRowBuilder().addComponents(menu);
 }
 
-function buildV2Container({ userId, section, content, actions }) {
+function buildV2Container({ userId, section, content, actions, media }) {
   const title = SECTION_TITLES[section] || "Valley";
   const body = truncateText(content, 3650);
   const container = new ContainerBuilder()
-    .setAccentColor(0x3d765c)
+    .setAccentColor(0x247a4b)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`## 🌿 Stoner Valley\n**${title}**`)
     )
-    .addSeparatorComponents(
-      new SeparatorBuilder().setDivider(true)
-    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+
+  if (media?.length) {
+    container.addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(...media)
+    );
+  }
+
+  container
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(body)
     )
@@ -136,6 +152,34 @@ function buildV2Container({ userId, section, content, actions }) {
   return container;
 }
 
+function responseMedia(response) {
+  const files = Array.isArray(response?.files) ? [...response.files] : [];
+  const media = [];
+
+  if (response?.includeBanner !== false) {
+    if (!files.some(file => file?.name === LEAF_BANNER_NAME)) {
+      files.unshift(new AttachmentBuilder(LEAF_BANNER_PATH, { name: LEAF_BANNER_NAME }));
+    }
+    media.push({
+      media: { url: `attachment://${LEAF_BANNER_NAME}` },
+      description: "Animated forest-green Stoner Valley leaf banner"
+    });
+  }
+
+  for (const item of response?.media || []) {
+    const url = typeof item === "string" ? item : item?.url;
+    if (!url) continue;
+    media.push({
+      media: { url },
+      ...(typeof item === "object" && item.description
+        ? { description: truncateText(item.description, 100) }
+        : {})
+    });
+  }
+
+  return { files, media: media.slice(0, 10) };
+}
+
 function buildV2MessagePayload({
   userId,
   section,
@@ -143,17 +187,24 @@ function buildV2MessagePayload({
   actions,
   update = false
 }) {
+  const attachments = responseMedia(response);
   const payload = {
     components: [
       buildV2Container({
         userId,
         section,
         content: responseText(response),
-        actions
+        actions,
+        media: attachments.media
       })
     ],
     allowedMentions: response?.allowedMentions || { parse: [] }
   };
+
+  if (attachments.files.length) {
+    payload.files = attachments.files;
+    if (update) payload.attachments = [];
+  }
 
   if (!update) {
     let flags = (response?.flags || 0) | MessageFlags.IsComponentsV2;

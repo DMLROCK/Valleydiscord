@@ -3,11 +3,11 @@
     "1206370546044903455": {
       "id": "1206370546044903455",
       "name": "fscotw",
-      "cash": 922,
+      "cash": 1222,
       "weed": 23,
       "seeds": 7,
       "storage": 100,
-      "xp": 10,
+      "xp": 35,
       "level": 2,
       "planted": 0,
       "fertilizer": 0,
@@ -58,7 +58,8 @@
         "batteries": {}
       },
       "businesses": [],
-      "messages": []
+      "messages": [],
+      "dailyClaimed": 1790884136750
     },
     "816772641586544702": {
       "id": "816772641586544702",

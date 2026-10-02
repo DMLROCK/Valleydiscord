@@ -1,0 +1,1 @@
+- [Stoner Valley scope](stoner-valley-scope.md) — Keep game features Discord-only, fictional-cash-only, and preserve legacy balances and fields.

@@ -1,6 +1,8 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("node:crypto");
+const path = require("node:path");
 const {
   Client,
   GatewayIntentBits,
@@ -11,9 +13,25 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  ActionRowBuilder
+  ActionRowBuilder,
+  AttachmentBuilder
 } = require("discord.js");
 const { SECTION_TITLES, buildV2MessagePayload } = require("./components-v2");
+const { createDefaultUser, normalizeUserRecord } = require("./user-data");
+const {
+  CHARACTER_GENDERS,
+  CHARACTER_STYLES,
+  PRODUCT_DESCRIPTIONS,
+  SPORTS,
+  productEmoji
+} = require("./catalog-content");
+const {
+  MAX_SECURITY_GUARDS,
+  SECURITY_GUARD_PRICE,
+  SECURITY_GUARD_WAGE,
+  resolveBusinessSecurity,
+  resolveSportsBet
+} = require("./game-mechanics");
 
 // ======================================================
 // STONER VALLEY BOT
@@ -22,13 +40,14 @@ const { SECTION_TITLES, buildV2MessagePayload } = require("./components-v2");
 const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = "1548055362740035686";
 
-if (!TOKEN) {
+if (!TOKEN && require.main === module) {
   console.error("❌ DISCORD_TOKEN is missing.");
   process.exit(1);
 }
 
 const DATA_FILE = "./stoner-valley-data.json";
 const BACKUP_FILE = "./stoner-valley-backup.json";
+const ASSET_DIR = path.join(__dirname, "assets");
 
 // ======================================================
 // DATABASE
@@ -52,6 +71,7 @@ function loadDatabase() {
   if (!db.users) db.users = {};
   if (!db.businesses) db.businesses = {};
   if (!db.nextBusinessId) db.nextBusinessId = 1;
+  if (!Array.isArray(db.staffAudit)) db.staffAudit = [];
 }
 
 function saveDatabase() {
@@ -77,74 +97,22 @@ loadDatabase();
 // ======================================================
 
 function createUser(id, username) {
-  if (!db.users[id]) {
-    db.users[id] = {
-      id,
-      username,
-
-      cash: 250,
-      bank: 0,
-
-      xp: 0,
-      level: 1,
-
-      phone: null,
-
-      inventory: {
-        flower: 0,
-        carts: 0,
-        edibles: {},
-        bongs: {},
-        lighters: {},
-        drinks: {},
-        batteries: {}
-      },
-
-      house: {
-        owned: false,
-        storage: 100
-      },
-
-      job: null,
-      businesses: [],
-
-      messages: [],
-
-      dailyClaimed: 0,
-      lastWork: 0
-    };
-  }
-
-  // Repair older databases
-  const u = db.users[id];
-
-  if (!u.inventory) u.inventory = {};
-  if (u.inventory.flower == null) u.inventory.flower = 0;
-  if (u.inventory.carts == null) u.inventory.carts = 0;
-  if (!u.inventory.edibles) u.inventory.edibles = {};
-  if (!u.inventory.bongs) u.inventory.bongs = {};
-  if (!u.inventory.lighters) u.inventory.lighters = {};
-  if (!u.inventory.drinks) u.inventory.drinks = {};
-  if (!u.inventory.batteries) u.inventory.batteries = {};
-
-  if (!u.businesses) u.businesses = [];
-  if (!u.messages) u.messages = [];
-
-  return u;
+  const record = db.users[id] || createDefaultUser(id, username);
+  db.users[id] = normalizeUserRecord(record, id, username);
+  return db.users[id];
 }
 
 function addXP(user, amount) {
-  user.xp += amount;
+  user.xp = Number(user.xp) + Number(amount);
+  let leveled = false;
 
-  const needed = user.level * 100;
-
-  if (user.xp >= needed) {
-    user.xp -= needed;
+  while (user.xp >= user.level * 100) {
+    user.xp -= user.level * 100;
     user.level++;
-    return true;
+    leveled = true;
   }
 
-  return false;
+  return leveled;
 }
 
 function money(amount) {
@@ -463,6 +431,88 @@ const client = new Client({
   ]
 });
 
+const STAFF_SESSION_MS = 30 * 60 * 1000;
+const STAFF_LOGIN_MAX_FAILURES = 5;
+const STAFF_LOGIN_LOCK_MS = 5 * 60 * 1000;
+const staffSessions = new Map();
+const staffLoginFailures = new Map();
+
+function staffPasswordMatches(suppliedPassword) {
+  const expectedPassword = process.env.STAFF_PASSWORD;
+  if (!expectedPassword) return false;
+
+  const suppliedHash = crypto.createHash("sha256").update(String(suppliedPassword)).digest();
+  const expectedHash = crypto.createHash("sha256").update(expectedPassword).digest();
+  return crypto.timingSafeEqual(suppliedHash, expectedHash);
+}
+
+function activeStaffSession(userId) {
+  const expiresAt = staffSessions.get(userId);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    staffSessions.delete(userId);
+    return false;
+  }
+  return true;
+}
+
+function recordStaffAction(actorId, targetId, action, details = {}) {
+  if (!Array.isArray(db.staffAudit)) db.staffAudit = [];
+  db.staffAudit.unshift({
+    timestamp: Date.now(),
+    actorId: String(actorId),
+    targetId: String(targetId || actorId),
+    action,
+    details
+  });
+  db.staffAudit = db.staffAudit.slice(0, 500);
+  saveDatabase();
+}
+
+function safeProfileText(value, maxLength) {
+  return String(value || "")
+    .replace(/@/g, "@\u200b")
+    .replace(/[`*_~|>]/g, "")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function inventoryBucketForProduct(user, productId) {
+  const product = PRODUCTS[productId];
+  if (!product) return null;
+
+  if (product.category === "flower") {
+    return {
+      amount: Number(user.inventory.flower) || 0,
+      add: value => { user.inventory.flower += value; },
+      remove: value => { user.inventory.flower -= value; }
+    };
+  }
+
+  if (product.category === "cart") {
+    return {
+      amount: Number(user.inventory.carts) || 0,
+      add: value => { user.inventory.carts += value; },
+      remove: value => { user.inventory.carts -= value; }
+    };
+  }
+
+  const bucketName = {
+    edible: "edibles",
+    bong: "bongs",
+    lighter: "lighters",
+    battery: "batteries",
+    drink: "drinks"
+  }[product.category];
+  if (!bucketName) return null;
+
+  return {
+    amount: Number(user.inventory[bucketName][productId]) || 0,
+    add: value => { user.inventory[bucketName][productId] = (Number(user.inventory[bucketName][productId]) || 0) + value; },
+    remove: value => { user.inventory[bucketName][productId] -= value; }
+  };
+}
+
 // ======================================================
 // COMMANDS
 // ======================================================
@@ -480,6 +530,41 @@ const commands = [
   new SlashCommandBuilder()
     .setName("profile")
     .setDescription("View your Valley profile"),
+
+  new SlashCommandBuilder()
+    .setName("character")
+    .setDescription("Customize or view your Valley character")
+    .addSubcommand(sub =>
+      sub
+        .setName("customize")
+        .setDescription("Create or update your character")
+        .addStringOption(opt =>
+          opt
+            .setName("name")
+            .setDescription("Your character's display name")
+            .setRequired(true)
+            .setMaxLength(24)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("gender")
+            .setDescription("Choose a character gender")
+            .setRequired(true)
+            .addChoices(...CHARACTER_GENDERS)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("style")
+            .setDescription("Choose an appearance preset")
+            .setRequired(true)
+            .addChoices(...CHARACTER_STYLES)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("view")
+        .setDescription("View your character card")
+    ),
 
   new SlashCommandBuilder()
     .setName("inventory")
@@ -588,7 +673,13 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("smoke")
-    .setDescription("Smoke flower using your smoking setup"),
+    .setDescription("Smoke flower using your smoking setup")
+    .addStringOption(opt =>
+      opt
+        .setName("celebrity")
+        .setDescription("Invite a fictional Valley celebrity cameo")
+        .addChoices({ name: "Snoop Dogg · fictional cameo", value: "snoop" })
+    ),
 
   new SlashCommandBuilder()
     .setName("edible")
@@ -756,8 +847,216 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName("security")
+    .setDescription("Hire and manage fictional AI security guards")
+    .addSubcommand(sub =>
+      sub
+        .setName("view")
+        .setDescription("View your guard team and business coverage")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("hire")
+        .setDescription("Hire one AI security guard for your business")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("dismiss")
+        .setDescription("Dismiss one security guard")
+    ),
+
+  new SlashCommandBuilder()
+    .setName("sports")
+    .setDescription("View and bet on fictional Valley League games")
+    .addSubcommand(sub =>
+      sub
+        .setName("board")
+        .setDescription("View fictional matchups and 2x in-game payouts")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("bet")
+        .setDescription("Place a fake-money bet on a fictional matchup")
+        .addStringOption(opt =>
+          opt
+            .setName("sport")
+            .setDescription("Choose a fictional matchup")
+            .setRequired(true)
+            .addChoices(...Object.entries(SPORTS).map(([value, sport]) => ({
+              name: `${sport.emoji} ${sport.label}`,
+              value
+            })))
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("side")
+            .setDescription("Choose the home or away team")
+            .setRequired(true)
+            .addChoices(
+              { name: "Home team", value: "home" },
+              { name: "Away team", value: "away" }
+            )
+        )
+        .addIntegerOption(opt =>
+          opt
+            .setName("amount")
+            .setDescription("Valley cash to wager")
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(1000000000)
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName("staff")
+    .setDescription("Private, password-gated Valley staff controls")
+    .addSubcommand(sub =>
+      sub
+        .setName("login")
+        .setDescription("Open a private staff password prompt")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("logout")
+        .setDescription("End your temporary staff session")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("inspect")
+        .setDescription("Privately inspect a player's Valley profile")
+        .addUserOption(opt =>
+          opt.setName("target").setDescription("Player to inspect").setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("currency")
+        .setDescription("Add or remove a player's cash or bank balance")
+        .addUserOption(opt =>
+          opt.setName("target").setDescription("Player to update").setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("account")
+            .setDescription("Cash wallet or bank balance")
+            .setRequired(true)
+            .addChoices(
+              { name: "Cash", value: "cash" },
+              { name: "Bank", value: "bank" }
+            )
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("operation")
+            .setDescription("Add or remove Valley money")
+            .setRequired(true)
+            .addChoices(
+              { name: "Add", value: "add" },
+              { name: "Remove", value: "remove" }
+            )
+        )
+        .addIntegerOption(opt =>
+          opt
+            .setName("amount")
+            .setDescription("Whole-number amount")
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(1000000000)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("grant-item")
+        .setDescription("Grant a dispensary product to a player")
+        .addUserOption(opt =>
+          opt.setName("target").setDescription("Player to update").setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("item")
+            .setDescription("Product to grant")
+            .setRequired(true)
+            .addChoices(...Object.entries(PRODUCTS).map(([value, item]) => ({
+              name: item.name,
+              value
+            })))
+        )
+        .addIntegerOption(opt =>
+          opt
+            .setName("quantity")
+            .setDescription("Number of product units")
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(1000)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("remove-item")
+        .setDescription("Remove a dispensary product from a player")
+        .addUserOption(opt =>
+          opt.setName("target").setDescription("Player to update").setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("item")
+            .setDescription("Product to remove")
+            .setRequired(true)
+            .addChoices(...Object.entries(PRODUCTS).map(([value, item]) => ({
+              name: item.name,
+              value
+            })))
+        )
+        .addIntegerOption(opt =>
+          opt
+            .setName("quantity")
+            .setDescription("Number of product units")
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(1000)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("xp")
+        .setDescription("Add XP to a player's profile")
+        .addUserOption(opt =>
+          opt.setName("target").setDescription("Player to update").setRequired(true)
+        )
+        .addIntegerOption(opt =>
+          opt
+            .setName("amount")
+            .setDescription("XP to award")
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(1000000)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("audit")
+        .setDescription("View recent staff actions")
+        .addIntegerOption(opt =>
+          opt
+            .setName("limit")
+            .setDescription("How many recent entries to show")
+            .setMinValue(1)
+            .setMaxValue(15)
+        )
+    ),
+
+  new SlashCommandBuilder()
     .setName("leaderboard")
-    .setDescription("View the Valley leaderboard"),
+    .setDescription("View a Valley leaderboard")
+    .addStringOption(opt =>
+      opt
+        .setName("category")
+        .setDescription("Choose a leaderboard")
+        .addChoices(
+          { name: "Total Valley wealth", value: "wealth" },
+          { name: "Snoop Dogg cameo sessions", value: "celebrity_sessions" }
+        )
+    ),
 
   new SlashCommandBuilder()
     .setName("dice")
@@ -799,6 +1098,7 @@ async function registerCommands() {
 }
 
 const COMMAND_SECTIONS = {
+  character: "home",
   balance: "economy",
   bank: "economy",
   daily: "economy",
@@ -819,7 +1119,10 @@ const COMMAND_SECTIONS = {
   text: "phone",
   texts: "phone",
   house: "property",
-  business: "business"
+  business: "business",
+  security: "business",
+  sports: "sports",
+  staff: "staff"
 };
 
 function sectionForCommand(commandName) {
@@ -836,6 +1139,7 @@ function buildActionOptions(section, user, commandName) {
       actionOption("Check balance", "cmd:balance", "View cash, bank, and total wealth"),
       actionOption("Claim daily reward", "cmd:daily", "Claim your daily Valley money"),
       actionOption("View leaderboard", "cmd:leaderboard", "See the top Valley members"),
+      actionOption("Celebrity session leaderboard", "leaderboard:celebrity_sessions", "See Snoop cameo session totals"),
       actionOption("Deposit money…", "bank:deposit", "Enter an amount to deposit"),
       actionOption("Withdraw money…", "bank:withdraw", "Enter an amount to withdraw")
     ];
@@ -871,8 +1175,10 @@ function buildActionOptions(section, user, commandName) {
   if (section === "shop") {
     return [
       actionOption("Browse the dispensary", "shop:browse", "View the full product list"),
+      actionOption("View sports board", "sports:board", "Open fictional Valley League matchups"),
+      actionOption("Hire an AI security guard", "security:hire", "Hire an NPC guard for your business"),
       ...Object.entries(PRODUCTS).map(([id, item]) =>
-        actionOption(`Buy ${item.name} · ${money(item.price)}`, `shop:buy:${id}`, "Purchase with Valley cash")
+        actionOption(`View ${item.name}`, `product:view:${id}`, `${money(item.price)} · Open the product card`)
       )
     ];
   }
@@ -918,9 +1224,24 @@ function buildActionOptions(section, user, commandName) {
     return [
       actionOption("View businesses", "business:view", "See your businesses"),
       actionOption("Collect earnings", "business:collect", "Collect available business income"),
+      actionOption("View security team", "security:view", "Check your AI guards and payroll"),
+      actionOption("Hire AI security guard", "security:hire", "Hire an NPC guard for your business"),
+      actionOption("Dismiss a guard", "security:dismiss", "Dismiss one hired guard"),
       ...Object.entries(BUSINESS_TYPES).map(([id, business]) =>
         actionOption(`Create ${business.name}`, `business:create:${id}`, `Start for ${money(business.price)}`)
       )
+    ];
+  }
+
+  if (section === "sports") {
+    return Object.entries(SPORTS).map(([id, sport]) =>
+      actionOption(`${sport.emoji} ${sport.label}`, `sports:show:${id}`, `${sport.home} vs ${sport.away}`)
+    );
+  }
+
+  if (section === "staff") {
+    return [
+      actionOption("Staff command guide", "cmd:info", "See the Valley command guide")
     ];
   }
 
@@ -929,6 +1250,8 @@ function buildActionOptions(section, user, commandName) {
     actionOption("My profile", "cmd:profile", "View level, XP, and account details"),
     actionOption("Check balance", "cmd:balance", "View cash and bank"),
     actionOption("View inventory", "cmd:inventory", "See everything you own"),
+    actionOption("Customize character…", "character:customize", "Choose a name, gender, and appearance preset"),
+    actionOption("View character", "character:view", "Open your character card"),
     actionOption("Command guide", "cmd:info", "Browse all slash commands")
   ];
 
@@ -1042,8 +1365,27 @@ Use the quick-action menu to view, buy, or upgrade your house.`;
 
 Businesses owned: **${businesses}**
 Available business types: **${Object.keys(BUSINESS_TYPES).length}**
+🛡️ AI guards: **${Math.min(MAX_SECURITY_GUARDS, Number(user.securityGuards) || 0)}/${MAX_SECURITY_GUARDS}**
 
-Use the quick-action menu to view your businesses, collect earnings, or start a new business.`;
+Use the quick-action menu to view your businesses, collect earnings, manage guards, or start a new business.`;
+  }
+
+  if (section === "sports") {
+    const matchups = Object.values(SPORTS)
+      .map(sport => `${sport.emoji} **${sport.label}** · ${sport.home} vs ${sport.away}`)
+      .join("\n");
+
+    return `🏟️ **Valley League · Fictional games**
+
+${matchups}
+
+Choose a matchup in the quick-action menu or use \`/sports bet\`. Bets use Valley cash only; a winning pick pays 2× the stake. No real teams, live odds, or real-money betting.`;
+  }
+
+  if (section === "staff") {
+    return `🔐 **Private staff controls**
+
+Use \`/staff login\` to open the private password prompt. Staff sessions expire after 30 minutes. Actions are recorded in the Valley audit log.`;
   }
 
   if (section === "home") {
@@ -1051,6 +1393,7 @@ Use the quick-action menu to view your businesses, collect earnings, or start a 
 
 💵 Cash: **${money(cash)}** · 🏦 Bank: **${money(bank)}**
 ⭐ Level: **${user.level || 1}** · 💼 Job: **${job}**
+🧍 Character: **${user.character ? safeProfileText(user.character.name, 24) : "Not created"}**
 
 Use the navigation menu to open a section. The quick-action menu has your most-used commands.`;
   }
@@ -1074,6 +1417,116 @@ function createV2Payload(
     actions: buildActionOptions(section, user, commandName),
     update
   });
+}
+
+function productInventoryCount(user, productId) {
+  const item = PRODUCTS[productId];
+  if (!item) return 0;
+  if (item.category === "flower") return Number(user.inventory.flower) || 0;
+  if (item.category === "cart") return Number(user.inventory.carts) || 0;
+
+  const bucketByCategory = {
+    edible: "edibles",
+    bong: "bongs",
+    lighter: "lighters",
+    battery: "batteries",
+    drink: "drinks"
+  };
+  const bucket = user.inventory[bucketByCategory[item.category]];
+  return Number(bucket?.[productId]) || 0;
+}
+
+function productCardActions(user, productId) {
+  const item = PRODUCTS[productId];
+  const actions = [
+    actionOption(`Buy ${item.name} · ${money(item.price)}`, `shop:buy:${productId}`, "Purchase this item with Valley cash"),
+    actionOption("Back to dispensary", "shop:browse", "Return to the full catalog"),
+    ...Object.entries(PRODUCTS)
+      .filter(([id]) => id !== productId)
+      .map(([id, product]) =>
+        actionOption(`View ${product.name}`, `product:view:${id}`, `${money(product.price)} · Product details`)
+      ),
+    actionOption("Hire an AI security guard", "security:hire", "Hire an NPC guard for your business"),
+    actionOption("Open Valley sports", "sports:board", "View fictional matchups")
+  ];
+  return actions.slice(0, 25);
+}
+
+async function showProductPage(interaction, productId) {
+  const item = PRODUCTS[productId];
+  if (!item) throw new Error("That product is no longer available.");
+
+  const user = createUser(interaction.user.id, interaction.user.username);
+  const filename = `${productId}.jpg`;
+  const imagePath = path.join(ASSET_DIR, "products", filename);
+  const owned = productInventoryCount(user, productId);
+  const image = new AttachmentBuilder(imagePath, { name: filename });
+
+  return interaction.update(buildV2MessagePayload({
+    userId: interaction.user.id,
+    section: "shop",
+    response: {
+      content: `${productEmoji(item.category)} **${item.name}**
+
+**Price:** ${money(item.price)}
+**Category:** ${item.category[0].toUpperCase()}${item.category.slice(1)}
+**In your inventory:** ${owned}${item.category === "flower" ? "g" : ""}
+
+${PRODUCT_DESCRIPTIONS[productId] || "A Valley dispensary catalog item, presented with original in-game artwork."}
+
+Choose **Buy this product** from the quick-action menu to purchase it. This is a fictional in-server catalog.`,
+      files: [image],
+      media: [{
+        url: `attachment://${filename}`,
+        description: `${item.name} product photo`
+      }]
+    },
+    actions: productCardActions(user, productId),
+    update: true
+  }));
+}
+
+function sportsMatchActions(sportId) {
+  const sport = SPORTS[sportId];
+  return [
+    actionOption(`Bet on ${sport.home}…`, `sports:bet:${sportId}:home`, "Enter a Valley cash wager"),
+    actionOption(`Bet on ${sport.away}…`, `sports:bet:${sportId}:away`, "Enter a Valley cash wager"),
+    ...Object.entries(SPORTS)
+      .filter(([id]) => id !== sportId)
+      .map(([id, other]) =>
+        actionOption(`${other.emoji} ${other.label}`, `sports:show:${id}`, `${other.home} vs ${other.away}`)
+      ),
+    actionOption("Back to sports board", "sports:board", "View all fictional matchups")
+  ];
+}
+
+async function showSportsMatch(interaction, sportId) {
+  const sport = SPORTS[sportId];
+  if (!sport) throw new Error("That fictional matchup is not available.");
+
+  const filename = sport.image;
+  const image = new AttachmentBuilder(path.join(ASSET_DIR, "sports", filename), { name: filename });
+
+  return interaction.update(buildV2MessagePayload({
+    userId: interaction.user.id,
+    section: "sports",
+    response: {
+      content: `${sport.emoji} **${sport.label}**
+
+🏠 **${sport.home}** vs **${sport.away}** ✈️
+
+${sport.description}
+
+Choose a side, then enter your wager. A winning pick returns **2×** the stake. The match, clip, odds, and Valley cash are fictional; nothing is based on a real event.`,
+      files: [image],
+      media: [{
+        url: `attachment://${filename}`,
+        description: `Animated fictional ${sport.label} play`
+      }]
+    },
+    actions: sportsMatchActions(sportId),
+    update: true
+  }));
 }
 
 function installV2ReplyAdapter(interaction) {
@@ -1183,9 +1636,124 @@ function showEightBallQuestionModal(interaction) {
   return interaction.showModal(modal);
 }
 
+function showCharacterModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId(`sv2:modal:${interaction.user.id}:character:customize`)
+    .setTitle("Customize your Valley character")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("name")
+          .setLabel("Character name")
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(24)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("gender")
+          .setLabel("Gender (woman, man, nonbinary, or your own)")
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(32)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("style")
+          .setLabel("Style (classic, streetwear, skater, greenhouse)")
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(24)
+          .setRequired(true)
+      )
+    );
+
+  return interaction.showModal(modal);
+}
+
+function showSportsBetModal(interaction, sportId, side) {
+  if (!SPORTS[sportId] || !["home", "away"].includes(side)) {
+    throw new Error("That Valley League bet is not available.");
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(`sv2:modal:${interaction.user.id}:sports:${sportId}:${side}`)
+    .setTitle("Place a Valley cash bet")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("amount")
+          .setLabel("Valley cash to wager")
+          .setStyle(TextInputStyle.Short)
+          .setMinLength(1)
+          .setMaxLength(12)
+          .setRequired(true)
+      )
+    );
+
+  return interaction.showModal(modal);
+}
+
+function showStaffLoginModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId(`sv2:modal:${interaction.user.id}:staff:login`)
+    .setTitle("Private staff authentication")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("password")
+          .setLabel("Staff password")
+          .setStyle(TextInputStyle.Short)
+          .setMinLength(1)
+          .setMaxLength(128)
+          .setRequired(true)
+      )
+    );
+
+  return interaction.showModal(modal);
+}
+
 async function executeV2Action(interaction, action) {
   if (action.startsWith("cmd:")) {
     return runCommandFromComponent(interaction, action.slice(4));
+  }
+
+  if (action.startsWith("leaderboard:")) {
+    return runCommandFromComponent(interaction, "leaderboard", {
+      strings: { category: action.slice("leaderboard:".length) }
+    });
+  }
+
+  if (action === "character:customize") {
+    return showCharacterModal(interaction);
+  }
+
+  if (action === "character:view") {
+    return runCommandFromComponent(interaction, "character", { subcommand: "view" });
+  }
+
+  if (action.startsWith("product:view:")) {
+    return showProductPage(interaction, action.slice("product:view:".length));
+  }
+
+  if (action === "sports:board") {
+    return runCommandFromComponent(interaction, "sports", { subcommand: "board" });
+  }
+
+  if (action.startsWith("sports:show:")) {
+    return showSportsMatch(interaction, action.slice("sports:show:".length));
+  }
+
+  if (action.startsWith("sports:bet:")) {
+    const [, , sportId, side] = action.split(":");
+    return showSportsBetModal(interaction, sportId, side);
+  }
+
+  if (action.startsWith("security:")) {
+    const subcommand = action.slice("security:".length);
+    if (!["view", "hire", "dismiss"].includes(subcommand)) {
+      throw new Error("That security action is not available.");
+    }
+    return runCommandFromComponent(interaction, "security", { subcommand });
   }
 
   if (action === "eightball:ask") {
@@ -1326,12 +1894,105 @@ async function handleV2ComponentInteraction(interaction) {
   const ownerId = parts[2];
   const modalType = parts[3];
   const modalAction = parts[4];
+  const modalValue = parts[5];
 
   if (ownerId !== interaction.user.id) {
     return interaction.reply(createV2Payload(
       interaction,
       { content: "Only the player who opened this Valley form can submit it.", ephemeral: true },
       "home"
+    ));
+  }
+
+  if (modalType === "character" && modalAction === "customize") {
+    const name = safeProfileText(interaction.fields.getTextInputValue("name"), 24);
+    const gender = safeProfileText(interaction.fields.getTextInputValue("gender"), 32);
+    const style = safeProfileText(interaction.fields.getTextInputValue("style"), 24).toLowerCase();
+    const allowedStyles = new Set(CHARACTER_STYLES.map(option => option.value));
+
+    if (!name || !gender || !allowedStyles.has(style)) {
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "Enter a name, gender, and one style preset: classic, streetwear, skater, or greenhouse.", ephemeral: true },
+        "home"
+      ));
+    }
+
+    return runCommandFromComponent(interaction, "character", {
+      subcommand: "customize",
+      strings: { name, gender, style }
+    }, "reply");
+  }
+
+  if (modalType === "sports" && SPORTS[modalAction] && ["home", "away"].includes(modalValue)) {
+    const amount = Number(interaction.fields.getTextInputValue("amount"));
+    if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1000000000) {
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "Enter a whole-number wager between $1 and $1,000,000,000 Valley cash.", ephemeral: true },
+        "sports"
+      ));
+    }
+
+    return runCommandFromComponent(interaction, "sports", {
+      subcommand: "bet",
+      strings: { sport: modalAction, side: modalValue },
+      integers: { amount }
+    }, "reply");
+  }
+
+  if (modalType === "staff" && modalAction === "login") {
+    if (!interaction.guildId || interaction.guildId !== GUILD_ID) {
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "Staff authentication is only available in the Stoner Valley server.", ephemeral: true },
+        "staff"
+      ));
+    }
+
+    const now = Date.now();
+    const failures = staffLoginFailures.get(interaction.user.id) || { count: 0, lockedUntil: 0 };
+    if (failures.lockedUntil > now) {
+      const minutes = Math.ceil((failures.lockedUntil - now) / 60000);
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: `Too many failed attempts. Try again in about ${minutes} minute(s).`, ephemeral: true },
+        "staff"
+      ));
+    }
+
+    if (!process.env.STAFF_PASSWORD) {
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "Staff login is unavailable. Ask the server owner to check the Replit Secrets configuration.", ephemeral: true },
+        "staff"
+      ));
+    }
+
+    const suppliedPassword = interaction.fields.getTextInputValue("password");
+    if (!staffPasswordMatches(suppliedPassword)) {
+      failures.count += 1;
+      if (failures.count >= STAFF_LOGIN_MAX_FAILURES) {
+        failures.count = 0;
+        failures.lockedUntil = now + STAFF_LOGIN_LOCK_MS;
+      }
+      staffLoginFailures.set(interaction.user.id, failures);
+
+      return interaction.reply(createV2Payload(
+        interaction,
+        { content: "That staff password was not accepted.", ephemeral: true },
+        "staff"
+      ));
+    }
+
+    staffLoginFailures.delete(interaction.user.id);
+    staffSessions.set(interaction.user.id, now + STAFF_SESSION_MS);
+    recordStaffAction(interaction.user.id, interaction.user.id, "login");
+
+    return interaction.reply(createV2Payload(
+      interaction,
+      { content: "✅ Staff tools unlocked for 30 minutes. Responses remain private, and changes are audited.", ephemeral: true },
+      "staff"
     ));
   }
 
@@ -1398,6 +2059,8 @@ function sectionForComponent(interaction) {
   }
   if (parts[1] === "modal" && parts[3] === "bank") return "economy";
   if (parts[1] === "modal" && parts[3] === "business") return "business";
+  if (parts[1] === "modal" && parts[3] === "sports") return "sports";
+  if (parts[1] === "modal" && parts[3] === "staff") return "staff";
   return "home";
 }
 
@@ -1419,6 +2082,127 @@ async function handleV2ComponentError(interaction, error) {
   } catch (responseError) {
     console.error("Could not send the Components V2 error response:", responseError);
   }
+}
+
+async function handleStaffCommand(interaction) {
+  const subcommand = interaction.options.getSubcommand();
+  const privateReply = content => interaction.reply({ content, ephemeral: true });
+
+  if (!interaction.guildId || interaction.guildId !== GUILD_ID) {
+    return privateReply("Staff controls are only available in the Stoner Valley server.");
+  }
+
+  if (subcommand === "login") {
+    return showStaffLoginModal(interaction);
+  }
+
+  if (subcommand === "logout") {
+    const hadSession = activeStaffSession(interaction.user.id);
+    staffSessions.delete(interaction.user.id);
+    if (hadSession) recordStaffAction(interaction.user.id, interaction.user.id, "logout");
+    return privateReply(hadSession ? "Staff session ended." : "You did not have an active staff session.");
+  }
+
+  if (!activeStaffSession(interaction.user.id)) {
+    return privateReply("Staff session required. Use `/staff login`; access expires after 30 minutes.");
+  }
+
+  if (subcommand === "inspect") {
+    const targetDiscordUser = interaction.options.getUser("target");
+    const target = db.users[targetDiscordUser.id]
+      ? createUser(targetDiscordUser.id, targetDiscordUser.username)
+      : null;
+    if (!target) return privateReply("No Valley profile exists for that player yet.");
+
+    recordStaffAction(interaction.user.id, targetDiscordUser.id, "inspect");
+    return privateReply(`🔎 **Private player inspection**
+
+Player: **${safeProfileText(target.username, 60)}**
+💵 Cash: ${money(target.cash)} · 🏦 Bank: ${money(target.bank)}
+⭐ Level: ${target.level} · XP: ${target.xp}
+🧍 Character: ${target.character ? safeProfileText(target.character.name, 24) : "Not created"}
+💨 Smoke sessions: ${target.smokeSessions}
+🎤 Snoop cameo sessions: ${target.celebritySessions.snoop}
+🛡️ AI guards: ${target.securityGuards}`);
+  }
+
+  if (subcommand === "audit") {
+    const limit = interaction.options.getInteger("limit") || 10;
+    const entries = db.staffAudit.slice(0, limit);
+    const lines = entries.map(entry => {
+      const when = new Date(entry.timestamp).toISOString().replace("T", " ").slice(0, 19);
+      const details = Object.entries(entry.details || {})
+        .map(([key, value]) => `${key}=${safeProfileText(value, 60)}`)
+        .join(" · ");
+      return `• \`${when} UTC\` · ${entry.action} · actor \`${entry.actorId}\` · target \`${entry.targetId}\`${details ? ` · ${details}` : ""}`;
+    });
+    return privateReply(`📋 **Recent staff audit actions**\n\n${lines.join("\n") || "No staff actions recorded."}`);
+  }
+
+  const targetDiscordUser = interaction.options.getUser("target");
+  const target = createUser(targetDiscordUser.id, targetDiscordUser.username);
+
+  if (subcommand === "currency") {
+    const account = interaction.options.getString("account");
+    const operation = interaction.options.getString("operation");
+    const amount = interaction.options.getInteger("amount");
+    if (!["cash", "bank"].includes(account) || !["add", "remove"].includes(operation)) {
+      return privateReply("Choose a valid account and operation.");
+    }
+
+    if (operation === "remove" && target[account] < amount) {
+      return privateReply(`That player only has ${money(target[account])} in ${account}. No change was made.`);
+    }
+
+    target[account] += operation === "add" ? amount : -amount;
+    recordStaffAction(interaction.user.id, targetDiscordUser.id, `currency_${operation}`, {
+      account,
+      amount
+    });
+
+    return privateReply(`✅ ${operation === "add" ? "Added" : "Removed"} ${money(amount)} ${account} for **${safeProfileText(target.username, 60)}**. New ${account} balance: ${money(target[account])}.`);
+  }
+
+  if (subcommand === "grant-item" || subcommand === "remove-item") {
+    const productId = interaction.options.getString("item");
+    const quantity = interaction.options.getInteger("quantity");
+    const product = PRODUCTS[productId];
+    const bucket = inventoryBucketForProduct(target, productId);
+    if (!product || !bucket) return privateReply("That product cannot be managed.");
+
+    const units = ["flower", "cart"].includes(product.category)
+      ? Number((product.amount * quantity).toFixed(2))
+      : quantity;
+    const isGrant = subcommand === "grant-item";
+    if (!isGrant && bucket.amount < units) {
+      return privateReply(`That player has ${bucket.amount} of ${product.name}; no change was made.`);
+    }
+
+    if (isGrant) bucket.add(units);
+    else bucket.remove(units);
+    const remaining = productInventoryCount(target, productId);
+    recordStaffAction(interaction.user.id, targetDiscordUser.id, isGrant ? "grant_item" : "remove_item", {
+      productId,
+      quantity,
+      units
+    });
+
+    return privateReply(`✅ ${isGrant ? "Granted" : "Removed"} ${quantity} × **${product.name}** for **${safeProfileText(target.username, 60)}**. Current amount: ${remaining}${product.category === "flower" ? "g" : ""}.`);
+  }
+
+  if (subcommand === "xp") {
+    const amount = interaction.options.getInteger("amount");
+    const oldLevel = target.level;
+    const leveled = addXP(target, amount);
+    recordStaffAction(interaction.user.id, targetDiscordUser.id, "xp_add", {
+      amount,
+      levelBefore: oldLevel,
+      levelAfter: target.level
+    });
+    return privateReply(`✅ Added ${amount} XP to **${safeProfileText(target.username, 60)}**. Level: ${oldLevel} → ${target.level}${leveled ? " 🎉" : ""}.`);
+  }
+
+  return privateReply("That staff action is not available.");
 }
 
 // ======================================================
@@ -1480,6 +2264,10 @@ async function handleSlashCommand(interaction) {
 
   const command = interaction.commandName;
 
+  if (command === "staff") {
+    return handleStaffCommand(interaction);
+  }
+
   // ====================================================
   // VALLEY
   // ====================================================
@@ -1515,6 +2303,10 @@ async function handleSlashCommand(interaction) {
 \`/dice\` — Roll the dice
 \`/coinflip\` — Flip a coin
 
+🧍 **Character**
+\`/character customize\` — Choose a name, gender, and look
+\`/character view\` — View your character card
+
 💼 **Work**
 \`/jobs\` — View jobs
 \`/job apply\` — Apply
@@ -1541,6 +2333,11 @@ async function handleSlashCommand(interaction) {
 \`/business create\`
 \`/business view\`
 \`/business collect\`
+\`/security view\`, \`/security hire\`, \`/security dismiss\`
+
+🏟️ **Fictional Valley League**
+\`/sports board\` — View fictional matchups
+\`/sports bet\` — Wager Valley cash on a simulated result
 
 🌿 **Use Your Items**
 \`/smoke\`
@@ -1550,8 +2347,59 @@ async function handleSlashCommand(interaction) {
 \`/lighter\`
 \`/drink\`
 
+🔐 **Staff**
+\`/staff login\` — Private staff-password prompt
+\`/staff inspect\`, \`/staff currency\`, \`/staff grant-item\`, \`/staff remove-item\`, \`/staff xp\`, \`/staff audit\`
+
 🎱 \`/eightball\` — Ask the 8-ball`
     });
+  }
+
+  if (command === "character") {
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "view") {
+      if (!user.character) {
+        return interaction.reply({
+          content: "🧍 You have not made a Valley character yet. Use `/character customize` or the home quick-action menu."
+        });
+      }
+
+      return interaction.reply({
+        content: `🧍 **${safeProfileText(user.character.name, 24)}**
+
+Gender: **${safeProfileText(user.character.gender, 32)}**
+Look: **${safeProfileText(user.character.style, 24)}**
+⭐ Level ${user.level} · 🌿 ${Number(user.smokeSessions) || 0} sessions`
+      });
+    }
+
+    if (sub === "customize") {
+      const name = safeProfileText(interaction.options.getString("name"), 24);
+      const gender = safeProfileText(interaction.options.getString("gender"), 32);
+      const style = safeProfileText(interaction.options.getString("style"), 24).toLowerCase();
+      const allowedGenders = new Set(CHARACTER_GENDERS.map(option => option.value));
+      const allowedStyles = new Set(CHARACTER_STYLES.map(option => option.value));
+
+      if (!name || !allowedGenders.has(gender.toLowerCase()) || !allowedStyles.has(style)) {
+        return interaction.reply({
+          content: "Choose a name, a listed gender, and one appearance preset.",
+          ephemeral: true
+        });
+      }
+
+      user.character = { name, gender, style, updatedAt: Date.now() };
+      saveDatabase();
+
+      return interaction.reply({
+        content: `✅ **Character saved**
+
+🧍 **${name}** · ${gender}
+👕 Look: **${style}**
+
+You can change these choices any time. Discord offers menus and presets here, not draggable appearance sliders.`
+      });
+    }
   }
 
   // ====================================================
@@ -1569,6 +2417,7 @@ async function handleSlashCommand(interaction) {
 🏦 Bank: ${money(user.bank)}
 💼 Job: ${user.job ? (JOBS[user.job]?.name || "Unknown job") : "Unemployed"}
 📱 Phone: ${user.phone ? PHONES[user.phone].name : "None"}
+🧍 Character: ${user.character ? safeProfileText(user.character.name, 24) : "Not created"}
 🏠 House: ${user.house.owned ? "Owned" : "None"}
 🏢 Businesses: ${user.businesses.length}`
     });
@@ -1839,6 +2688,11 @@ Job: ${job.name}
     const sub = interaction.options.getSubcommand();
 
     if (sub === "browse") {
+      const featuredFilename = "flower_1g.jpg";
+      const featuredImage = new AttachmentBuilder(
+        path.join(ASSET_DIR, "products", featuredFilename),
+        { name: featuredFilename }
+      );
 
       const flower = Object.values(PRODUCTS)
         .filter(x => x.category === "flower")
@@ -1900,7 +2754,12 @@ ${batteries}
 🥤 **DRINKS**
 ${drinks}
 
-Use **/dispensary buy** and select exactly what you want.`
+Use the quick-action menu to open individual product cards, see original artwork, and buy with Valley cash.`,
+        files: [featuredImage],
+        media: [{
+          url: `attachment://${featuredFilename}`,
+          description: "Featured Stoner Valley flower product"
+        }]
       });
     }
 
@@ -2018,8 +2877,16 @@ Cash remaining: **${money(user.cash)}**
     }
 
     user.inventory.flower -= 1;
-
+    user.smokeSessions += 1;
     addXP(user, 10);
+
+    const celebrity = interaction.options.getString("celebrity");
+    let sessionDescription = "You used 1g of flower with your own bong and lighter.";
+    if (celebrity === "snoop") {
+      user.celebritySessions.snoop += 1;
+      const characterName = user.character?.name || interaction.user.username;
+      sessionDescription = `In this fictional Valley scene, Snoop Dogg joins ${safeProfileText(characterName, 24)} for a session. This cameo is not an endorsement.`;
+    }
 
     saveDatabase();
 
@@ -2027,10 +2894,11 @@ Cash remaining: **${money(user.cash)}**
       content:
 `💨 **Session complete.**
 
-You used **1g of flower** with your own bong and lighter.
+${sessionDescription}
 
 🌿 Flower remaining: **${user.inventory.flower}g**
-⭐ +10 XP`
+⭐ +10 XP
+🏆 Total sessions: **${user.smokeSessions}**${celebrity === "snoop" ? `\n🎤 Snoop cameo sessions: **${user.celebritySessions.snoop}**` : ""}`
     });
   }
 
@@ -2525,17 +3393,181 @@ Available earnings: ${money(b.balance)}`
         business.balance = 0;
       }
 
-      user.cash += total;
+      const securityResult = resolveBusinessSecurity(total, user.securityGuards);
+      user.cash += securityResult.net;
 
       saveDatabase();
+
+      const incidentMessage = !securityResult.incidentAttempted
+        ? "🛡️ No security incident."
+        : securityResult.incidentLoss > 0
+          ? `🚨 A simulated break-in cost ${money(securityResult.incidentLoss)}.`
+          : "🛡️ Your guards stopped a simulated break-in.";
 
       return interaction.reply({
         content:
 `🏢 **Business earnings collected!**
 
-You received **${money(total)}**.
+Gross earnings: **${money(securityResult.gross)}**
+Security incident: ${incidentMessage}
+Guard payroll: **${money(securityResult.payroll)}**
+Net received: **${money(securityResult.net)}**
 
 CEO: **${interaction.user.username}**`
+      });
+    }
+  }
+
+  if (command === "security") {
+    const sub = interaction.options.getSubcommand();
+    const guardCount = Math.min(MAX_SECURITY_GUARDS, Math.floor(Number(user.securityGuards) || 0));
+    const incidentChance = Math.max(0.05, 0.25 - guardCount * 0.04);
+    const incidentLossRate = Math.max(0, 0.4 - guardCount * 0.08);
+
+    if (sub === "view") {
+      const businessCount = user.businesses.filter(id => db.businesses[id]).length;
+      return interaction.reply({
+        content: `🛡️ **Valley AI Security**
+
+NPC guards hired: **${guardCount}/${MAX_SECURITY_GUARDS}**
+Businesses covered: **${businessCount}**
+Hire cost: **${money(SECURITY_GUARD_PRICE)} per guard**
+Payroll: **${money(SECURITY_GUARD_WAGE)} per guard collection**
+Current incident chance: **${Math.round(incidentChance * 100)}%**
+Potential loss if an incident hits: **${Math.round(incidentLossRate * 100)}% of that collection**
+
+Each guard reduces incident chance and impact. Guards use fixed in-game rules; no external AI service is contacted. Use \`/security hire\` or \`/security dismiss\`.`
+      });
+    }
+
+    if (sub === "hire") {
+      if (!user.businesses.some(id => db.businesses[id])) {
+        return interaction.reply({
+          content: "Start a business with `/business create` before hiring security."
+        });
+      }
+      if (guardCount >= MAX_SECURITY_GUARDS) {
+        return interaction.reply({
+          content: `Your business team already has the maximum ${MAX_SECURITY_GUARDS} guards.`
+        });
+      }
+      if (user.cash < SECURITY_GUARD_PRICE) {
+        return interaction.reply({
+          content: `❌ Hiring costs ${money(SECURITY_GUARD_PRICE)}. Your cash: ${money(user.cash)}.`
+        });
+      }
+
+      user.cash -= SECURITY_GUARD_PRICE;
+      user.securityGuards = guardCount + 1;
+      saveDatabase();
+      return interaction.reply({
+        content: `✅ Hired an AI security guard for **${money(SECURITY_GUARD_PRICE)}**.
+
+Team: **${user.securityGuards}/${MAX_SECURITY_GUARDS}**
+Payroll: **${money(SECURITY_GUARD_WAGE)} per business collection**
+Coverage now cuts simulated incident risk and loss. See \`/security view\` for exact rates.`
+      });
+    }
+
+    if (sub === "dismiss") {
+      if (!guardCount) {
+        return interaction.reply({ content: "You do not have any guards to dismiss." });
+      }
+
+      user.securityGuards = guardCount - 1;
+      saveDatabase();
+      return interaction.reply({
+        content: `Dismissed one guard. You now have **${user.securityGuards}/${MAX_SECURITY_GUARDS}** guards. The hiring cost is not refunded.`
+      });
+    }
+  }
+
+  if (command === "sports") {
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "board") {
+      const matchups = Object.values(SPORTS)
+        .map(sport => `${sport.emoji} **${sport.label}**\n${sport.home} vs ${sport.away}`)
+        .join("\n\n");
+      return interaction.reply({
+        content: `🏟️ **Valley League · Fictional matchups**
+
+${matchups}
+
+Choose a matchup from the quick-action menu to watch an animated play, or use \`/sports bet\`. Winning picks pay **2× the stake** in Valley cash. No real teams, real events, or real-money betting.`
+      });
+    }
+
+    if (sub === "bet") {
+      const sportId = interaction.options.getString("sport");
+      const side = interaction.options.getString("side");
+      const amount = interaction.options.getInteger("amount");
+      const sport = SPORTS[sportId];
+      if (!sport || !["home", "away"].includes(side)) {
+        return interaction.reply({ content: "Choose a valid fictional matchup and team." });
+      }
+      if (!Number.isSafeInteger(amount) || amount < 1) {
+        return interaction.reply({ content: "Enter a whole-number wager greater than zero." });
+      }
+      if (user.cash < amount) {
+        return interaction.reply({
+          content: `❌ Your cash is ${money(user.cash)}; you cannot wager ${money(amount)}.`
+        });
+      }
+
+      const winningSide = Math.random() < 0.5 ? "home" : "away";
+      const result = resolveSportsBet(amount, side, winningSide);
+      user.cash += result.netChange;
+      user.sportsStats.bets += 1;
+      user.sportsStats[result.won ? "wins" : "losses"] += 1;
+      user.sportsStats.net += result.netChange;
+
+      let homeScore;
+      let awayScore;
+      if (sportId === "basketball") {
+        homeScore = 78 + Math.floor(Math.random() * 35);
+        awayScore = 78 + Math.floor(Math.random() * 35);
+      } else if (sportId === "soccer") {
+        homeScore = Math.floor(Math.random() * 4);
+        awayScore = Math.floor(Math.random() * 4);
+      } else {
+        homeScore = 10 + Math.floor(Math.random() * 35);
+        awayScore = 10 + Math.floor(Math.random() * 35);
+      }
+      if (winningSide === "home" && homeScore <= awayScore) homeScore = awayScore + 1;
+      if (winningSide === "away" && awayScore <= homeScore) awayScore = homeScore + 1;
+
+      user.lastSportsResult = { sportId, winningSide, homeScore, awayScore, playedAt: Date.now() };
+      saveDatabase();
+
+      const filename = sport.image;
+      const sportsClip = new AttachmentBuilder(
+        path.join(ASSET_DIR, "sports", filename),
+        { name: filename }
+      );
+      const winnerName = winningSide === "home" ? sport.home : sport.away;
+      const pickedName = side === "home" ? sport.home : sport.away;
+      const payoutLine = result.won
+        ? `✅ Your pick won. Gross payout: **${money(result.payout)}** (2× stake).`
+        : `❌ Your pick lost. The **${money(amount)}** stake is gone.`;
+
+      return interaction.reply({
+        content: `🎬 **${sport.label} · Simulated final**
+
+🏠 ${sport.home} **${homeScore}** — **${awayScore}** ${sport.away} ✈️
+Winner: **${winnerName}**
+Your pick: **${pickedName}** · Stake: **${money(amount)}**
+${payoutLine}
+
+Net result: **${result.netChange >= 0 ? "+" : ""}${money(result.netChange)}**
+New cash balance: **${money(user.cash)}**
+
+This is a fictional animation and random in-game outcome, not live sports data.`,
+        files: [sportsClip],
+        media: [{
+          url: `attachment://${filename}`,
+          description: `Animated fictional ${sport.label} play`
+        }]
       });
     }
   }
@@ -2545,21 +3577,38 @@ CEO: **${interaction.user.username}**`
   // ====================================================
 
   if (command === "leaderboard") {
+    const category = interaction.options.getString("category") || "wealth";
+    const users = Object.entries(db.users).map(([id, record]) =>
+      createUser(id, record.username || record.name)
+    );
 
-    const users = Object.values(db.users)
-      .sort((a, b) =>
-        (b.cash + b.bank) - (a.cash + a.bank)
-      )
+    if (category === "celebrity_sessions") {
+      const ranked = users
+        .filter(player => player.celebritySessions.snoop > 0)
+        .sort((a, b) => b.celebritySessions.snoop - a.celebritySessions.snoop)
+        .slice(0, 10);
+      const list = ranked
+        .map((player, index) =>
+          `**${index + 1}.** ${safeProfileText(player.username, 60)} — ${player.celebritySessions.snoop} sessions`
+        )
+        .join("\n");
+
+      return interaction.reply({
+        content: `🎤 **FICTIONAL SNOOP CAMEO SESSION LEADERBOARD**\n\n${list || "No cameo sessions recorded yet. Use `/smoke` and choose the fictional Snoop Dogg cameo option."}`
+      });
+    }
+
+    const ranked = users
+      .sort((a, b) => (b.cash + b.bank) - (a.cash + a.bank))
       .slice(0, 10);
-
-    const list = users
-      .map((u, i) =>
-        `**${i + 1}.** ${u.username} — ${money(u.cash + u.bank)}`
+    const list = ranked
+      .map((player, index) =>
+        `**${index + 1}.** ${safeProfileText(player.username, 60)} — ${money(player.cash + player.bank)}`
       )
       .join("\n");
 
     return interaction.reply({
-      content: `🏆 **STONER VALLEY LEADERBOARD**\n\n${list || "No members yet."}`
+      content: `🏆 **STONER VALLEY WEALTH LEADERBOARD**\n\n${list || "No members yet."}`
     });
   }
 
@@ -2619,20 +3668,27 @@ CEO: **${interaction.user.username}**`
 
 }
 
-// ======================================================
-// AUTOMATIC SAVES
-// ======================================================
+if (require.main === module) {
+  // ======================================================
+  // AUTOMATIC SAVES
+  // ======================================================
 
-setInterval(() => {
-  saveDatabase();
-}, 30000);
+  setInterval(() => {
+    saveDatabase();
+  }, 30000);
 
-setInterval(() => {
-  backupDatabase();
-}, 300000);
+  setInterval(() => {
+    backupDatabase();
+  }, 300000);
 
-// ======================================================
-// LOGIN
-// ======================================================
+  // ======================================================
+  // LOGIN
+  // ======================================================
 
-client.login(TOKEN);
+  client.login(TOKEN).catch(error => {
+    console.error("Discord login failed. Check the DISCORD_TOKEN secret.", error.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { commands, PRODUCTS, SPORTS };
