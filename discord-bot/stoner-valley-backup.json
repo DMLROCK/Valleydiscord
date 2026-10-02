@@ -33,7 +33,10 @@
       "jointUses": 0,
       "cartUses": 0,
       "waxUses": 0,
-      "house": false,
+      "house": {
+        "owned": false,
+        "storage": 100
+      },
       "houseLevel": 0,
       "vault": false,
       "vaultLevel": 0,
@@ -59,7 +62,26 @@
       },
       "businesses": [],
       "messages": [],
-      "dailyClaimed": 1790884136750
+      "dailyClaimed": 1790884136750,
+      "username": "fscotw",
+      "bank": 0,
+      "phone": null,
+      "character": {
+        "name": "Tyrone",
+        "gender": "man",
+        "style": "greenhouse",
+        "updatedAt": 1790960431140
+      },
+      "celebritySessions": {
+        "snoop": 0
+      },
+      "sportsStats": {
+        "bets": 0,
+        "wins": 0,
+        "losses": 0,
+        "net": 0
+      },
+      "securityGuards": 0
     },
     "816772641586544702": {
       "id": "816772641586544702",
@@ -165,5 +187,14 @@
     "lastUpdate": 1790880828890
   },
   "businesses": {},
-  "nextBusinessId": 1
+  "nextBusinessId": 1,
+  "staffAudit": [
+    {
+      "timestamp": 1790960521247,
+      "actorId": "1206370546044903455",
+      "targetId": "1206370546044903455",
+      "action": "login",
+      "details": {}
+    }
+  ]
 }
