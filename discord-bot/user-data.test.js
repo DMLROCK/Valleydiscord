@@ -45,6 +45,26 @@ test("legacy balances, inventory, house, and unknown fields survive normalizatio
   assert.equal(user.oldAchievement, "kept");
 });
 
+test("bad legacy data is sanitized without crashing", () => {
+  const user = normalizeUserRecord({
+    id: "bad-user",
+    username: "",
+    cash: "NaN",
+    house: true,
+    inventory: { flower: "invalid" },
+    celebritySessions: null,
+    sportsStats: { wins: "oops" }
+  }, "bad-user", "Bad User");
+
+  assert.equal(user.username, "Bad User");
+  assert.equal(user.cash, 250);
+  assert.equal(user.house.owned, true);
+  assert.equal(user.house.storage, 100);
+  assert.equal(user.inventory.flower, 0);
+  assert.deepEqual(user.celebritySessions, { snoop: 0 });
+  assert.equal(user.sportsStats.wins, 0);
+});
+
 test("current inventory and player data are preserved while new fields are added", () => {
   const user = normalizeUserRecord({
     id: "current-user",

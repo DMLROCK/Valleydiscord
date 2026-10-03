@@ -32,16 +32,20 @@ test("Components V2 payloads attach the green banner and media gallery", () => {
   );
 });
 
-test("Components V2 updates clear old attachments and omit initial-response flags", () => {
+test("duplicate banners are not re-added and update payloads clear old attachments", () => {
   const payload = buildV2MessagePayload({
     userId: "123456789012345678",
     section: "home",
-    response: { content: "Updated Valley page." },
+    response: {
+      content: "Updated Valley page.",
+      files: [new AttachmentBuilder(Buffer.from("banner"), { name: "valley-leaf-banner.gif" })],
+      media: []
+    },
     actions: [],
     update: true
   });
 
   assert.equal(payload.flags, undefined);
   assert.deepEqual(payload.attachments, []);
-  assert.ok(payload.files.some(file => file.name === "valley-leaf-banner.gif"));
+  assert.equal(payload.files.filter(file => file.name === "valley-leaf-banner.gif").length, 1);
 });

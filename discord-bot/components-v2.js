@@ -145,7 +145,7 @@ function buildV2Container({ userId, section, content, actions, media }) {
       makeSelectRow(
         `sv2:actions:${userId}:${section}`,
         `Quick actions · ${title}`,
-        actions
+        Array.isArray(actions) ? actions : []
       )
     );
 
@@ -157,7 +157,8 @@ function responseMedia(response) {
   const media = [];
 
   if (response?.includeBanner !== false) {
-    if (!files.some(file => file?.name === LEAF_BANNER_NAME)) {
+    const hasBanner = files.some(file => file?.name === LEAF_BANNER_NAME);
+    if (!hasBanner) {
       files.unshift(new AttachmentBuilder(LEAF_BANNER_PATH, { name: LEAF_BANNER_NAME }));
     }
     media.push({
@@ -183,22 +184,24 @@ function responseMedia(response) {
 function buildV2MessagePayload({
   userId,
   section,
-  response,
-  actions,
+  response = {},
+  actions = [],
   update = false
 }) {
-  const attachments = responseMedia(response);
+  const safeResponse = response && typeof response === "object" ? response : { content: String(response ?? "") };
+  const safeActions = Array.isArray(actions) ? actions : [];
+  const attachments = responseMedia(safeResponse);
   const payload = {
     components: [
       buildV2Container({
         userId,
         section,
-        content: responseText(response),
-        actions,
+        content: responseText(safeResponse),
+        actions: safeActions,
         media: attachments.media
       })
     ],
-    allowedMentions: response?.allowedMentions || { parse: [] }
+    allowedMentions: safeResponse.allowedMentions || { parse: [] }
   };
 
   if (attachments.files.length) {
@@ -207,8 +210,8 @@ function buildV2MessagePayload({
   }
 
   if (!update) {
-    let flags = (response?.flags || 0) | MessageFlags.IsComponentsV2;
-    if (response?.ephemeral) flags |= MessageFlags.Ephemeral;
+    let flags = (safeResponse.flags || 0) | MessageFlags.IsComponentsV2;
+    if (safeResponse.ephemeral) flags |= MessageFlags.Ephemeral;
     payload.flags = flags;
   }
 

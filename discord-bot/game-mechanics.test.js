@@ -24,6 +24,15 @@ test("sports bets return the correct fake-cash win and loss amounts", () => {
   assert.throws(() => resolveSportsBet(0, "home", "home"), RangeError);
 });
 
+test("sports bets accept case-insensitive side values", () => {
+  assert.deepEqual(resolveSportsBet(50, "HOME", "home"), {
+    won: true,
+    payout: 100,
+    netChange: 50
+  });
+  assert.throws(() => resolveSportsBet(50, "middle", "home"), RangeError);
+});
+
 test("unguarded business collections can have a simulated security loss", () => {
   const result = resolveBusinessSecurity(1000, 0, 0);
   assert.equal(result.incidentAttempted, true);
@@ -50,4 +59,10 @@ test("guard payroll never drives a business collection below zero", () => {
   assert.equal(result.incidentLoss, 0);
   assert.equal(result.payroll, 20);
   assert.equal(result.net, 0);
+});
+
+test("invalid roll values fall back to a safe default", () => {
+  const result = resolveBusinessSecurity(1000, 2, Number.NaN);
+  assert.equal(result.incidentAttempted, true);
+  assert.equal(result.incidentLoss, 280);
 });

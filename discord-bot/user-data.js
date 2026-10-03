@@ -54,8 +54,8 @@ function normalizeUserRecord(record, id, username) {
     ? { ...record }
     : createDefaultUser(id, username);
 
-  user.id = user.id || id;
-  user.username = user.username || user.name || username || "Player";
+  user.id = user.id ?? id ?? "unknown-user";
+  user.username = String(user.username || user.name || username || "Player");
   user.cash = numberOr(user.cash, 250);
   user.bank = numberOr(user.bank, numberOr(user.vault, 0));
   user.xp = numberOr(user.xp, 0);
@@ -66,8 +66,9 @@ function normalizeUserRecord(record, id, username) {
   const inventory = user.inventory && typeof user.inventory === "object" && !Array.isArray(user.inventory)
     ? { ...user.inventory }
     : {};
-  inventory.flower = numberOr(inventory.flower, numberOr(user.weed, 0));
-  inventory.carts = numberOr(inventory.carts, numberOr(user.carts, 0));
+
+  inventory.flower = Math.max(0, numberOr(inventory.flower, numberOr(user.weed, 0)));
+  inventory.carts = Math.max(0, numberOr(inventory.carts, numberOr(user.carts, 0)));
 
   for (const bucket of INVENTORY_BUCKETS) {
     inventory[bucket] = inventory[bucket] &&
@@ -82,6 +83,7 @@ function normalizeUserRecord(record, id, username) {
   const house = previousHouse && typeof previousHouse === "object" && !Array.isArray(previousHouse)
     ? { ...previousHouse }
     : {};
+
   house.owned = typeof house.owned === "boolean"
     ? house.owned
     : Boolean(previousHouse);
@@ -99,6 +101,7 @@ function normalizeUserRecord(record, id, username) {
     ? { ...user.character }
     : null;
   user.smokeSessions = Math.max(0, numberOr(user.smokeSessions, 0));
+
   user.celebritySessions = user.celebritySessions &&
     typeof user.celebritySessions === "object" &&
     !Array.isArray(user.celebritySessions)
@@ -111,13 +114,17 @@ function normalizeUserRecord(record, id, username) {
     !Array.isArray(user.sportsStats)
     ? { ...user.sportsStats }
     : {};
+
   user.sportsStats = {
     bets: Math.max(0, numberOr(sportsStats.bets, 0)),
     wins: Math.max(0, numberOr(sportsStats.wins, 0)),
     losses: Math.max(0, numberOr(sportsStats.losses, 0)),
     net: numberOr(sportsStats.net, 0)
   };
+
   user.securityGuards = Math.max(0, numberOr(user.securityGuards, 0));
+  user.dailyClaimed = Math.max(0, user.dailyClaimed);
+  user.lastWork = Math.max(0, user.lastWork);
 
   return user;
 }
