@@ -3727,7 +3727,6 @@ This is a fictional animation and random in-game outcome, not live sports data.`
     });
   }
 
-}
 
 if (require.main === module) {
   // ======================================================
