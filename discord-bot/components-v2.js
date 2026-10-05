@@ -210,7 +210,6 @@ let flags = (response?.flags || 0) | MessageFlags.IsComponentsV2;
 if (!update && response?.ephemeral) flags |= MessageFlags.Ephemeral;
 payload.flags = flags;
  
-  }
 
   return payload;
 }
