@@ -205,11 +205,11 @@ function buildV2MessagePayload({
     payload.files = attachments.files;
     if (update) payload.attachments = [];
   }
-
-  if (!update) {
-    let flags = (response?.flags || 0) | MessageFlags.IsComponentsV2;
-    if (response?.ephemeral) flags |= MessageFlags.Ephemeral;
-    payload.flags = flags;
+// Components V2 must keep the IsComponentsV2 flag on message edits too.
+let flags = (response?.flags || 0) | MessageFlags.IsComponentsV2;
+if (!update && response?.ephemeral) flags |= MessageFlags.Ephemeral;
+payload.flags = flags;
+ 
   }
 
   return payload;
