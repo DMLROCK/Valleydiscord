@@ -678,7 +678,7 @@ const commands = [
       opt
         .setName("celebrity")
         .setDescription("Invite a fictional Valley celebrity cameo")
-        .addChoices({ name: "Snoop Dogg · fictional cameo", value: "snoop" })
+        .addChoices({ name: "Snoop Dogg ·real cameo", value: "snoop" })
     ),
 
   new SlashCommandBuilder()
@@ -907,7 +907,7 @@ const commands = [
         )
     ),
 
-  new SlashCommandBuilder()
+    new SlashCommandBuilder()
     .setName("staff")
     .setDescription("Private, password-gated Valley staff controls")
     .addSubcommand(sub =>
@@ -925,7 +925,10 @@ const commands = [
         .setName("inspect")
         .setDescription("Privately inspect a player's Valley profile")
         .addUserOption(opt =>
-          opt.setName("target").setDescription("Player to inspect").setRequired(true)
+          opt
+            .setName("target")
+            .setDescription("Player to inspect")
+            .setRequired(true)
         )
     )
     .addSubcommand(sub =>
@@ -933,7 +936,10 @@ const commands = [
         .setName("currency")
         .setDescription("Add or remove a player's cash or bank balance")
         .addUserOption(opt =>
-          opt.setName("target").setDescription("Player to update").setRequired(true)
+          opt
+            .setName("target")
+            .setDescription("Player to update")
+            .setRequired(true)
         )
         .addStringOption(opt =>
           opt
@@ -966,20 +972,44 @@ const commands = [
     )
     .addSubcommand(sub =>
       sub
+        .setName("add-cash")
+        .setDescription("Add Valley cash to a player's wallet")
+        .addUserOption(opt =>
+          opt
+            .setName("target")
+            .setDescription("Player to give cash to")
+            .setRequired(true)
+        )
+        .addIntegerOption(opt =>
+          opt
+            .setName("amount")
+            .setDescription("Amount of cash to add")
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(1000000000)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
         .setName("grant-item")
         .setDescription("Grant a dispensary product to a player")
         .addUserOption(opt =>
-          opt.setName("target").setDescription("Player to update").setRequired(true)
+          opt
+            .setName("target")
+            .setDescription("Player to update")
+            .setRequired(true)
         )
         .addStringOption(opt =>
           opt
             .setName("item")
             .setDescription("Product to grant")
             .setRequired(true)
-            .addChoices(...Object.entries(PRODUCTS).map(([value, item]) => ({
-              name: item.name,
-              value
-            })))
+            .addChoices(
+              ...Object.entries(PRODUCTS).map(([value, item]) => ({
+                name: item.name,
+                value
+              }))
+            )
         )
         .addIntegerOption(opt =>
           opt
@@ -995,17 +1025,22 @@ const commands = [
         .setName("remove-item")
         .setDescription("Remove a dispensary product from a player")
         .addUserOption(opt =>
-          opt.setName("target").setDescription("Player to update").setRequired(true)
+          opt
+            .setName("target")
+            .setDescription("Player to update")
+            .setRequired(true)
         )
         .addStringOption(opt =>
           opt
             .setName("item")
             .setDescription("Product to remove")
             .setRequired(true)
-            .addChoices(...Object.entries(PRODUCTS).map(([value, item]) => ({
-              name: item.name,
-              value
-            })))
+            .addChoices(
+              ...Object.entries(PRODUCTS).map(([value, item]) => ({
+                name: item.name,
+                value
+              }))
+            )
         )
         .addIntegerOption(opt =>
           opt
@@ -1021,7 +1056,10 @@ const commands = [
         .setName("xp")
         .setDescription("Add XP to a player's profile")
         .addUserOption(opt =>
-          opt.setName("target").setDescription("Player to update").setRequired(true)
+          opt
+            .setName("target")
+            .setDescription("Player to update")
+            .setRequired(true)
         )
         .addIntegerOption(opt =>
           opt
@@ -1043,6 +1081,7 @@ const commands = [
             .setMinValue(1)
             .setMaxValue(15)
         )
+    ),
     ),
 
   new SlashCommandBuilder()
