@@ -45,8 +45,8 @@ if (!TOKEN && require.main === module) {
   process.exit(1);
 }
 
-const DATA_FILE = "./stoner-valley-data.json";
-const BACKUP_FILE = "./stoner-valley-backup.json";
+const DATA_FILE = path.join(__dirname, "stoner-valley-data.json");
+const BACKUP_FILE = path.join(__dirname, "stoner-valley-backup.json");
 const ASSET_DIR = path.join(__dirname, "assets");
 
 // ======================================================
