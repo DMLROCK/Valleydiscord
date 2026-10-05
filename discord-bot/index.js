@@ -559,24 +559,12 @@ const commands = [
             .setRequired(true)
             .addChoices(...CHARACTER_STYLES)
         )
+    )
     .addSubcommand(sub =>
       sub
-        .setName("add-cash")
-        .setDescription("Add Valley cash to a player's wallet")
-        .addUserOption(opt =>
-          opt
-            .setName("target")
-            .setDescription("Player to give cash to")
-            .setRequired(true)
-        )
-        .addIntegerOption(opt =>
-          opt
-            .setName("amount")
-            .setDescription("Amount of cash to add")
-            .setRequired(true)
-            .setMinValue(1)
-            .setMaxValue(1000000000)
-        )
+        .setName("view")
+        .setDescription("View your Valley character")
+    ),
     ),
   new SlashCommandBuilder()
     .setName("inventory")
