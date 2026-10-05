@@ -2411,22 +2411,46 @@ Look: **${safeProfileText(user.character.style, 24)}**
       });
     }
 
-    if (sub === "customize") {
-      const name = safeProfileText(interaction.options.getString("name"), 24);
-      const gender = safeProfileText(interaction.options.getString("gender"), 32);
-      const style = safeProfileText(interaction.options.getString("style"), 24).toLowerCase();
-      const allowedGenders = new Set(CHARACTER_GENDERS.map(option => option.value));
-      const allowedStyles = new Set(CHARACTER_STYLES.map(option => option.value));
+    const name = safeProfileText(
+  interaction.fields.getTextInputValue("name"),
+  24
+);
 
-      if (!name || !allowedGenders.has(gender.toLowerCase()) || !allowedStyles.has(style)) {
-        return interaction.reply({
-          content: "Choose a name, a listed gender, and one appearance preset.",
-          ephemeral: true
-        });
+const rawGender = safeProfileText(
+  interaction.fields.getTextInputValue("gender"),
+  32
+).toLowerCase();
+
+const genderAliases = {
+  male: "man",
+  man: "man",
+  female: "woman",
+  woman: "woman",
+  nonbinary: "nonbinary",
+  "non-binary": "nonbinary",
+  "self described": "self-described",
+  "self-described": "self-described"
+};
+
+const gender = genderAliases[rawGender] || rawGender;
+
+const style = safeProfileText(
+  interaction.fields.getTextInputValue("style"),
+  24
+).toLowerCase();
+
+const allowedGenders = new Set(
+  CHARACTER_GENDERS.map(option => option.value)
+);
+
+const allowedStyles = new Set(
+  CHARACTER_STYLES.map(option => option.value)
+);
+
+if (!name || !allowedGenders.has(gender) || !allowedStyles.has(style)) {
       }
 
-      user.character = { name, gender, style, updatedAt: Date.now() };
-      saveDatabase();
+    
 
       return interaction.reply({
         content: `✅ **Character saved**
