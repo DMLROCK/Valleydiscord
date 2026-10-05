@@ -565,7 +565,6 @@ const commands = [
         .setName("view")
         .setDescription("View your Valley character")
     ),
-    ),
   new SlashCommandBuilder()
     .setName("inventory")
     .setDescription("View everything you own"),
