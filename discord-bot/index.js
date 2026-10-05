@@ -1086,7 +1086,7 @@ const commands = [
         .setName("question")
         .setDescription("Ask a question")
         .setRequired(true)
-    )
+        ),  
 ];
 
 // ======================================================
