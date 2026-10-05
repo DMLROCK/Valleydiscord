@@ -562,8 +562,25 @@ const commands = [
     )
     .addSubcommand(sub =>
       sub
-        .setName("view")
-        .setDescription("View your character card")
+       .addSubcommand(sub =>
+  sub
+    .setName("add-cash")
+    .setDescription("Add Valley cash to a player's wallet")
+    .addUserOption(opt =>
+      opt
+        .setName("target")
+        .setDescription("Player to give cash to")
+        .setRequired(true)
+    )
+    .addIntegerOption(opt =>
+      opt
+        .setName("amount")
+        .setDescription("Amount of cash to add")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(1000000000)
+    )
+) 
     ),
 
   new SlashCommandBuilder()
@@ -2141,7 +2158,27 @@ Player: **${safeProfileText(target.username, 60)}**
 
   const targetDiscordUser = interaction.options.getUser("target");
   const target = createUser(targetDiscordUser.id, targetDiscordUser.username);
+if (subcommand === "add-cash") {
+  const amount = interaction.options.getInteger("amount");
 
+  target.cash += amount;
+
+  recordStaffAction(
+    interaction.user.id,
+    targetDiscordUser.id,
+    "cash_add",
+    {
+      account: "cash",
+      amount
+    }
+  );
+
+  saveDatabase();
+
+  return privateReply(
+    `✅ Added ${money(amount)} cash to **${safeProfileText(target.username, 60)}**. New cash balance: ${money(target.cash)}.`
+  );
+}
   if (subcommand === "currency") {
     const account = interaction.options.getString("account");
     const operation = interaction.options.getString("operation");
